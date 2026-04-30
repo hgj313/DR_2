@@ -33,8 +33,10 @@ class PrototypeStore:
         # 检查是否已存在（基于 document_id + page_name）
         existing = self.chroma_store._collection.get(
             where={
-                "document_id": description.document_id,
-                "page_name": description.page_name
+                "$and": [
+                    {"document_id": description.document_id},
+                    {"page_name": description.page_name}
+                ]
             }
         )
 
@@ -54,6 +56,7 @@ class PrototypeStore:
                     "components": ",".join(description.components),
                     "interactions": description.interactions,
                     "query_text": description.query_text,
+                    "image_path": description.image_path,
                 }]
             )
             return doc_id
@@ -72,6 +75,7 @@ class PrototypeStore:
                 "components": ",".join(description.components),
                 "interactions": description.interactions,
                 "query_text": description.query_text,
+                "image_path": description.image_path,
             }
         )
 
@@ -84,6 +88,31 @@ class PrototypeStore:
         )
 
         return doc_id
+
+    def update_document_id(self, prototype_id: str, new_document_id: Optional[str]) -> bool:
+        """更新原型图的 document_id（用于绑定/解绑）"""
+        try:
+            # 查找该 prototype
+            existing = self.chroma_store._collection.get(
+                where={"id": prototype_id}
+            )
+
+            if not existing or not existing.get("ids"):
+                return False
+
+            # 获取现有 metadata
+            old_meta = existing["metadatas"][0] if existing.get("metadatas") else {}
+            old_meta["document_id"] = new_document_id
+
+            # 更新
+            self.chroma_store._collection.update(
+                ids=[prototype_id],
+                metadatas=[old_meta],
+            )
+            return True
+        except Exception as e:
+            print(f"Error updating prototype document_id: {e}")
+            return False
 
     def retrieve(
         self,
@@ -112,6 +141,7 @@ class PrototypeStore:
                 components=meta.get("components", "").split(",") if meta.get("components") else [],
                 interactions=meta.get("interactions", ""),
                 query_text=meta.get("query_text", ""),
+                image_path=meta.get("image_path", ""),
             ))
 
         return descriptions

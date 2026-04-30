@@ -56,6 +56,63 @@ def get_prototype_store() -> PrototypeStore:
     return _prototype_store
 
 
+def get_prd_store() -> ChromaStore:
+    """获取 PRD 文档存储"""
+    return ChromaStore(
+        collection_name="prd_documents",
+        persist_directory="./chroma_data",
+        use_remote=False,
+    )
+
+
+@tool
+def retrieve_prd_chunks(query: str, document_id: str = None, k: int = 10) -> str:
+    """
+    从 PRD 文档库检索相关内容片段
+
+    Args:
+        query: 查询文本
+        document_id: 可选，限定检索的文档 ID
+        k: 返回的 chunk 数量（默认 10）
+
+    Returns:
+        相关文档片段列表
+    """
+    from vec_db.embeddings.bge_m3_embedding import BgeM3Embeddings
+
+    store = get_prd_store()
+    embedder = BgeM3Embeddings()
+    query_embedding = embedder.embed_query(query)
+
+    results = store.similarity_search(query_embedding, k=k)
+
+    if not results:
+        return "未找到相关的 PRD 文档内容"
+
+    formatted = []
+    for doc, score in results:
+        meta = doc.metadata
+        # 如果指定了 document_id，进行过滤
+        if document_id and meta.get("document_id") != document_id:
+            continue
+
+        heading = meta.get("heading", "未命名")
+        chunk_idx = meta.get("chunk_index", "?")
+        header_path = meta.get("header_path", "")
+
+        formatted.append(
+            f"--- [{heading}] (Chunk #{chunk_idx}, 相似度: {score:.2f}) ---\n"
+            f"路径: {header_path}\n"
+            f"{doc.page_content[:500]}"
+            f"{'...' if len(doc.page_content) > 500 else ''}"
+        )
+
+    if not formatted:
+        return "未找到与查询相关的 PRD 文档内容"
+
+    return "\n\n".join(formatted[:k])
+
+
 @tool
 def retrieve_standards(query: str) -> str:
     """从设计标准知识库检索相关内容"""
@@ -214,6 +271,7 @@ def get_all_tools():
     return [
         retrieve_standards,
         retrieve_prototypes,
+        retrieve_prd_chunks,
         analyze_prd,
         analyze_prototype,
         generate_report,

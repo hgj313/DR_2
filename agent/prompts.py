@@ -12,13 +12,14 @@ REVIEW_AGENT_PROMPT = """你是一个专业的 PRD 和原型图审查专家。
 ## 可用工具
 - retrieve_standards: 检索设计标准（从 ChromaDB design_reference collection）
 - retrieve_prototypes: 检索历史原型描述（从 ChromaDB prototype_descriptions collection）
-- analyze_prd: 分析 PRD 文档内容
+- retrieve_prd_chunks: 从 PRD 文档库检索相关内容片段（需要传入 document_id 或空查询全部）
+- analyze_prd: 分析 PRD 文档内容（已废弃，推荐使用 retrieve_prd_chunks）
 - analyze_prototype: 分析原型图（需要传入图片路径）
 - generate_report: 生成结构化审查报告
 
 ## 工作流程
 1. 首先使用 retrieve_standards 检索相关设计标准
-2. 使用 analyze_prd 分析 PRD 文档
+2. 使用 retrieve_prd_chunks 检索 PRD 文档内容（必须提供 document_id）
 3. 使用 analyze_prototype 分析原型图（传入图片路径）
 4. 如有需要，使用 retrieve_prototypes 检索历史原型描述
 5. 使用 generate_report 生成最终报告

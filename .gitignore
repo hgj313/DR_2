@@ -1,10 +1,42 @@
-# Python-generated files
+# Python
 __pycache__/
 *.py[oc]
 build/
 dist/
 wheels/
 *.egg-info
+*.pyc
 
 # Virtual environments
+.venv/
 .venv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# uv
+uv.lock
+
+# ChromaDB (向量数据库数据，本地持久化不需要跟踪)
+chroma_data/
+
+# Logs
+logs/
+
+# 测试/临时文件
+tests/test_*.py
+tests/text.txt
+test_query_after_delete.py
+test_restored_data.py
+
+# 参考文档（不需要跟踪）
+prd-test/
+ref-doc/
+tec-ref/
+
+# Claude/GSD 工具生成
+.claude/
+.planning/

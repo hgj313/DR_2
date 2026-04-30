@@ -1,6 +1,6 @@
 """ReviewAgent - PRD 和原型图审查 Agent"""
 
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langgraph.checkpoint.memory import MemorySaver
 
 from models.minimax import MiniMaxModel
@@ -16,17 +16,18 @@ class ReviewAgent:
         self.model = MiniMaxModel()
 
         # 创建 ReAct Agent
-        self.agent = create_react_agent(
+        self.agent = create_agent(
             model=self.model.chat,
             tools=get_all_tools(),
-            state_modifier=REVIEW_AGENT_PROMPT,
+            system_prompt=REVIEW_AGENT_PROMPT,
             checkpointer=MemorySaver(),
         )
 
-    def invoke(self, input: str, config: dict = None) -> dict:
+    def invoke(self, input: str, thread_id: str = None) -> dict:
         """同步调用 Agent"""
-        if config is None:
-            config = {}
+        config = {}
+        if thread_id:
+            config = {"configurable": {"thread_id": thread_id}}
 
         result = self.agent.invoke(
             {"messages": [{"role": "user", "content": input}]},
