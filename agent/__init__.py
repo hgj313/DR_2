@@ -1,4 +1,5 @@
 from agent.review_agent import ReviewAgent
+from agent.anthropic_review_agent import AnthropicReviewAgent, StreamChunk as AnthropicStreamChunk
 from agent.session import ReviewSessionManager, get_session_manager
 from agent.schemas import (
     DocumentInfo,
@@ -10,6 +11,8 @@ from agent.schemas import (
 
 __all__ = [
     "ReviewAgent",
+    "AnthropicReviewAgent",
+    "AnthropicStreamChunk",
     "ReviewSessionManager",
     "get_session_manager",
     "DocumentInfo",

@@ -1,9 +1,153 @@
 """PRD & 原型图审查系统入口"""
 
+import sys
 from pathlib import Path
 
-from agent.review_agent import create_review_agent
+from agent.review_agent import (
+    create_review_agent,
+    StreamChunk,
+    StreamChunkType,
+)
+from agent.anthropic_review_agent import (
+    create_anthropic_review_agent,
+    StreamChunk as AnthropicStreamChunk,
+    StreamChunkType as AnthropicStreamChunkType,
+)
 from agent.session import get_session_manager
+
+
+# ANSI 颜色码
+class Colors:
+    THINKING = "\033[96m"    # 青色 - 思考
+    TOOL = "\033[93m"        # 黄色 - 工具
+    RESULT = "\033[94m"      # 蓝色 - 结果
+    FINAL = "\033[92m"       # 绿色 - 最终
+    STATUS = "\033[90m"      # 灰色 - 状态
+    TEXT = "\033[95m"        # 洋红 - 文本（Anthropic 特有）
+    RESET = "\033[0m"
+
+
+def print_chunk(chunk, use_color: bool = True):
+    """根据 chunk 类型格式化输出（支持新旧两种 StreamChunk）"""
+    color = ""
+    prefix = ""
+
+    # 获取 chunk type（兼容新旧两种类型）
+    chunk_type = chunk.type if hasattr(chunk, 'type') else str(chunk.type)
+
+    # Anthropic 原生 TEXT 类型
+    if chunk_type == AnthropicStreamChunkType.TEXT:
+        if use_color:
+            color = Colors.TEXT
+            prefix = "📝 文本"
+        else:
+            prefix = "[文本]"
+        content = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+        print(f"{color}{prefix}: {content}{Colors.RESET if use_color else ''}", end="", flush=True)
+        return
+
+    # 使用旧版 StreamChunkType
+    if use_color:
+        if chunk_type == StreamChunkType.THINKING:
+            color = Colors.THINKING
+            prefix = "🤔 思考"
+        elif chunk_type == StreamChunkType.TOOL_CALL:
+            color = Colors.TOOL
+            prefix = "🔧 工具调用"
+        elif chunk_type == StreamChunkType.TOOL_RESULT:
+            color = Colors.RESULT
+            prefix = "📋 工具结果"
+        elif chunk_type == StreamChunkType.FINAL:
+            color = Colors.FINAL
+            prefix = "✨ 最终回复"
+        elif chunk_type == StreamChunkType.STATUS:
+            color = Colors.STATUS
+            prefix = "⏳ 状态"
+    else:
+        if chunk_type == StreamChunkType.THINKING:
+            prefix = "[思考]"
+        elif chunk_type == StreamChunkType.TOOL_CALL:
+            prefix = "[工具调用]"
+        elif chunk_type == StreamChunkType.TOOL_RESULT:
+            prefix = "[工具结果]"
+        elif chunk_type == StreamChunkType.FINAL:
+            prefix = "[最终]"
+        elif chunk_type == StreamChunkType.STATUS:
+            prefix = "[状态]"
+
+    reset = Colors.RESET if use_color else ""
+    content = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+
+    print(f"{color}{prefix}: {content}{reset}")
+
+
+def stream_review(agent, session_id: str, session, use_color: bool = True):
+    """流式审查会话"""
+    context_parts = ["请审查以下内容:"]
+
+    if session.document:
+        context_parts.append(f"\nPRD 文档: {session.document.file_name}")
+        context_parts.append(f"Document ID: {session.document.document_id}")
+
+    if session.prototypes:
+        context_parts.append(f"\n原型图 ({len(session.prototypes)} 张):")
+        for p in session.prototypes:
+            bind_info = f"→ {p.document_id}" if p.document_id else "(未绑定)"
+            # 传递 image_path 让 Agent 能调用 analyze_prototype
+            image_path = getattr(p, 'image_path', '') or ''
+            context_parts.append(f"  - {p.name} [{bind_info}]")
+            if image_path:
+                context_parts.append(f"    图片路径: {image_path}")
+
+    context_parts.append("\n请执行合规性审查并生成报告。")
+    user_msg = "\n".join(context_parts)
+
+    print("\n" + "=" * 60)
+    print("开始流式审查...")
+    print("=" * 60 + "\n")
+
+    # 用于累积 thinking 内容
+    thinking_buffer = []
+
+    for chunk in agent.stream(user_msg, thread_id=session_id):
+        chunk_type = chunk.type if hasattr(chunk, 'type') else str(chunk.type)
+
+        # Anthropic TEXT 类型（流式文本输出，不换行）
+        if chunk_type == AnthropicStreamChunkType.TEXT:
+            print_chunk(chunk, use_color)
+
+        elif chunk_type == StreamChunkType.THINKING or chunk_type == "thinking":
+            # 思考内容直接打印，不累积
+            print_chunk(chunk, use_color)
+            print()  # 思考后空一行
+
+        elif chunk_type == StreamChunkType.TOOL_RESULT:
+            # 工具结果打印工具名和结果摘要
+            if isinstance(chunk.content, dict):
+                tool_name = chunk.content.get("tool", "unknown")
+                result = chunk.content.get("result", "")
+                # 截断过长结果
+                if len(result) > 200:
+                    result = result[:200] + "..."
+                print(f"{Colors.TOOL if use_color else ''}🔧 调用工具: {tool_name}{Colors.RESET if use_color else ''}")
+                print(f"{Colors.RESULT if use_color else ''}📋 结果: {result}{Colors.RESET if use_color else ''}")
+                print()
+
+        elif chunk_type == StreamChunkType.TOOL_CALL or chunk_type == "tool_call":
+            print_chunk(chunk, use_color)
+            print()
+
+        elif chunk_type == StreamChunkType.FINAL or chunk_type == "final":
+            # 最终回复加个边框
+            print(f"{Colors.FINAL if use_color else ''}{'=' * 60}{Colors.RESET if use_color else ''}")
+            print(f"{Colors.FINAL if use_color else ''}审查报告:{Colors.RESET if use_color else ''}")
+            print(f"{Colors.FINAL if use_color else ''}{'=' * 60}{Colors.RESET if use_color else ''}")
+            print()
+            print_chunk(chunk, use_color)
+            print()
+
+        elif chunk_type == StreamChunkType.STATUS or chunk_type == "status":
+            print_chunk(chunk, use_color)
 
 
 def main():
@@ -20,12 +164,24 @@ def main():
     print("  unbind <session_id> <proto_id>")
     print("                                - 解除绑定")
     print("  session <session_id>         - 查看会话状态")
-    print("  review <session_id>          - 开始审查指定会话")
+    print("  review <session_id>          - 开始审查指定会话（流式）")
+    print("  review <session_id> --sync  - 开始审查指定会话（同步，非流式）")
+    print("  use anthropic|langgraph      - 切换 Agent 类型")
     print()
     print("  直接输入审查请求，Agent 将自动处理")
     print()
 
-    agent = create_review_agent()
+    # 检查是否使用 Anthropic 模式（支持运行时切换）
+    use_anthropic = "--anthropic" in sys.argv
+    if use_anthropic:
+        agent = create_anthropic_review_agent()
+        agent_type = "anthropic"
+        print("[使用 Anthropic 原生流式接口]")
+    else:
+        agent = create_review_agent()
+        agent_type = "langgraph"
+    print(f"当前 Agent: {agent_type}")
+    print()
     session_mgr = get_session_manager()
 
     current_session_id = None
@@ -43,6 +199,25 @@ def main():
 
             parts = user_input.split()
             cmd = parts[0].lower()
+
+            # 切换 Agent 类型
+            if cmd == "use":
+                if len(parts) < 2:
+                    print("用法: use anthropic|langgraph")
+                    print(f"当前: {agent_type}")
+                    continue
+                target = parts[1].lower()
+                if target == "anthropic":
+                    agent = create_anthropic_review_agent()
+                    agent_type = "anthropic"
+                    print("[切换到 Anthropic 原生流式接口]")
+                elif target == "langgraph":
+                    agent = create_review_agent()
+                    agent_type = "langgraph"
+                    print("[切换到 LangGraph 流式接口]")
+                else:
+                    print(f"未知类型: {target}，可用: anthropic, langgraph")
+                continue
 
             # 创建新会话
             if cmd == "new":
@@ -131,7 +306,7 @@ def main():
             # 审查
             if cmd == "review":
                 if len(parts) < 2:
-                    print("用法: review <session_id>")
+                    print("用法: review <session_id> [--sync]")
                     continue
 
                 session_id = parts[1]
@@ -141,45 +316,74 @@ def main():
                     print(f"会话 {session_id} 不存在")
                     continue
 
-                # 构建审查上下文
-                context_parts = ["请审查以下内容:"]
+                # 检查是否使用同步模式
+                use_sync = "--sync" in parts
+                use_color = "--no-color" not in parts
 
-                if session.document:
-                    context_parts.append(f"\nPRD 文档: {session.document.file_name}")
-                    context_parts.append(f"Document ID: {session.document.document_id}")
+                if use_sync:
+                    # 同步模式（非流式）
+                    context_parts = ["请审查以下内容:"]
 
-                if session.prototypes:
-                    context_parts.append(f"\n原型图 ({len(session.prototypes)} 张):")
-                    for p in session.prototypes:
-                        bind_info = f"→ {p.document_id}" if p.document_id else "(未绑定)"
-                        context_parts.append(f"  - {p.name} [{bind_info}]")
+                    if session.document:
+                        context_parts.append(f"\nPRD 文档: {session.document.file_name}")
+                        context_parts.append(f"Document ID: {session.document.document_id}")
 
-                context_parts.append("\n请执行合规性审查并生成报告。")
+                    if session.prototypes:
+                        context_parts.append(f"\n原型图 ({len(session.prototypes)} 张):")
+                        for p in session.prototypes:
+                            bind_info = f"→ {p.document_id}" if p.document_id else "(未绑定)"
+                            image_path = getattr(p, 'image_path', '') or ''
+                            context_parts.append(f"  - {p.name} [{bind_info}]")
+                            if image_path:
+                                context_parts.append(f"    图片路径: {image_path}")
 
-                user_msg = "\n".join(context_parts)
-                result = agent.invoke(user_msg, thread_id=session_id)
+                    context_parts.append("\n请执行合规性审查并生成报告。")
 
-                print("\n--- 审查结果 ---")
-                for message in result["messages"]:
-                    if hasattr(message, "content") and message.content:
-                        print(message.content)
+                    user_msg = "\n".join(context_parts)
+                    result = agent.invoke(user_msg, thread_id=session_id)
+
+                    print("\n--- 审查结果 ---")
+                    for message in result["messages"]:
+                        if hasattr(message, "content") and message.content:
+                            print(message.content)
+                else:
+                    # 流式模式
+                    stream_review(agent, session_id, session, use_color)
                 continue
 
-            # 其他直接发给 Agent
-            result = agent.invoke(user_input, thread_id=current_session_id)
+            # 其他直接发给 Agent（支持流式）
+            if current_session_id:
+                # 检查是否使用流式
+                use_stream = "--stream" in parts
+                parts_no_flags = [p for p in parts if not p.startswith("--")]
 
-            print("\n--- 回复 ---")
-            for message in result["messages"]:
-                if hasattr(message, "content") and message.content:
-                    print(message.content)
+                if use_stream and len(parts_no_flags) == 1:
+                    # 全流式模式
+                    print("\n--- 流式回复 ---")
+                    for chunk in agent.stream(user_input, thread_id=current_session_id):
+                        print_chunk(chunk)
+                    print()
+                else:
+                    # 同步模式
+                    msg = " ".join(parts_no_flags) if parts_no_flags else user_input
+                    result = agent.invoke(msg, thread_id=current_session_id)
 
-            print()
+                    print("\n--- 回复 ---")
+                    for message in result["messages"]:
+                        if hasattr(message, "content") and message.content:
+                            print(message.content)
+                    print()
+            else:
+                print("请先创建或选择会话 (new / session <id>)")
+                continue
 
         except KeyboardInterrupt:
             print("\n再见!")
             break
         except Exception as e:
             print(f"错误: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 if __name__ == "__main__":
