@@ -42,7 +42,7 @@ def get_standards_store() -> ChromaStore:
     global _standards_store
     if _standards_store is None:
         _standards_store = ChromaStore(
-            collection_name="design_reference",
+            collection_name="design_references",
             use_remote=False,
             persist_directory="./chroma_data",
         )

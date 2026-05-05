@@ -104,7 +104,7 @@ class ReviewSessionManager:
                     "chunk_index": i,
                     **chunk_result.metadata,
                 }
-
+                #循环里面插入数据库性能极差，后续第二次改进-2026.5.5（hgj)
                 chroma_store.store(
                     ids=[chunk_id],
                     documents=[chunk_result.content],
@@ -252,42 +252,6 @@ class ReviewSessionManager:
 
                 session.updated_at = __import__("datetime").datetime.now()
                 logger.info(f"Unbound prototype {prototype_id} from document {old_doc_id}")
-                return True
-
-        logger.warning(f"Prototype {prototype_id} not found in session {session_id}")
-        return False
-
-    def rebind_prototype(
-        self,
-        session_id: str,
-        prototype_id: str,
-        new_document_id: str,
-    ) -> bool:
-        """
-        重新绑定原型图到新的 PRD 文档
-
-        Args:
-            session_id: 会话 ID
-            prototype_id: 原型图 ID
-            new_document_id: 新的 PRD 文档 ID
-
-        Returns:
-            bool: 是否成功
-        """
-        session = self._get_session(session_id)
-
-        # 验证新 document_id 存在
-        if session.document and session.document.document_id != new_document_id:
-            logger.warning(f"Document {new_document_id} not in session {session_id}")
-            return False
-
-        # 找到原型图并更新
-        for prototype in session.prototypes:
-            if prototype.id == prototype_id:
-                prototype.document_id = new_document_id
-                self.prototype_store.update_document_id(prototype_id, new_document_id)
-                session.updated_at = __import__("datetime").datetime.now()
-                logger.info(f"Rebound prototype {prototype_id} to document {new_document_id}")
                 return True
 
         logger.warning(f"Prototype {prototype_id} not found in session {session_id}")
