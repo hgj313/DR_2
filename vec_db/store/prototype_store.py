@@ -27,18 +27,46 @@ class PrototypeStore:
         description: PrototypeDescription,
         embedding: list[float],
     ) -> str:
-        """存储原型描述（防重复：基于 document_id + page_name）"""
+        """存储原型描述（防重复：基于 id 或 document_id + page_name）"""
         from langchain_core.documents import Document
 
-        # 检查是否已存在（基于 document_id + page_name）
-        existing = self.chroma_store._collection.get(
-            where={
-                "$and": [
-                    {"document_id": description.document_id},
-                    {"page_name": description.page_name}
-                ]
-            }
+        # 先通过 id 检查是否已存在
+        existing_by_id = self.chroma_store._collection.get(
+            where={"id": description.id}
         )
+
+        if existing_by_id and existing_by_id.get("ids"):
+            # id 已存在，更新
+            doc_id = existing_by_id["ids"][0]
+            self.chroma_store._collection.update(
+                ids=[doc_id],
+                embeddings=[embedding],
+                documents=[description.query_text],
+                metadatas=[{
+                    "id": doc_id,
+                    "name": description.name,
+                    "document_id": description.document_id,
+                    "page_name": description.page_name,
+                    "layout": description.layout,
+                    "components": ",".join(description.components),
+                    "interactions": description.interactions,
+                    "query_text": description.query_text,
+                    "image_path": description.image_path,
+                }]
+            )
+            return doc_id
+
+        # 检查是否已存在（基于 document_id + page_name，仅当两者都非空时）
+        existing = None
+        if description.document_id and description.page_name:
+            existing = self.chroma_store._collection.get(
+                where={
+                    "$and": [
+                        {"document_id": description.document_id},
+                        {"page_name": description.page_name}
+                    ]
+                }
+            )
 
         if existing and existing.get("ids"):
             # 已存在，更新而非重复插入
@@ -129,13 +157,13 @@ class PrototypeStore:
         descriptions = []
         for doc, score in results:
             meta = doc.metadata
-            if document_id and meta.get("document_id") != document_id:
+            if document_id is not None and meta.get("document_id") != document_id:
                 continue
 
             descriptions.append(PrototypeDescription(
                 id=meta.get("id", ""),
                 name=meta.get("name", ""),
-                document_id=meta.get("document_id", ""),
+                document_id=meta.get("document_id", "") or None,
                 page_name=meta.get("page_name", ""),
                 layout=meta.get("layout", ""),
                 components=meta.get("components", "").split(",") if meta.get("components") else [],

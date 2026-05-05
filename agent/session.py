@@ -140,7 +140,7 @@ class ReviewSessionManager:
         interactions: str = "",
     ) -> PrototypeDescription:
         """
-        注册原型图到会话
+        注册原型图到会话（自动调用 GLM 分析图片）
 
         Args:
             session_id: 会话 ID
@@ -160,6 +160,27 @@ class ReviewSessionManager:
 
         # 生成 id
         prototype_id = str(uuid.uuid4())[:16]
+
+        # 如果没有提供 layout/components/interactions，自动调用 GLM 分析图片
+        if not layout or not components:
+            try:
+                from models.glm import GLMModel
+                glm = GLMModel()
+                analysis_result = glm.analyze_image(
+                    image_path,
+                    """分析这张原型图，请提取：
+1. 页面名称/标题
+2. 布局结构（头部、内容区、底部等）
+3. 组件列表（按钮、表单、列表、导航等）
+4. 交互元素（跳转、弹窗、状态变化等）
+
+请以结构化格式返回，用分隔线清晰区分各部分。"""
+                )
+                
+                # 解析 GLM 返回的分析结果
+                layout, components, interactions = self._parse_prototype_analysis(analysis_result, name)
+            except Exception as e:
+                logger.warning(f"Failed to analyze prototype image: {e}")
 
         # 生成 query_text
         query_text = f"{name} {layout} {' '.join(components)}"
@@ -189,6 +210,111 @@ class ReviewSessionManager:
 
         logger.info(f"Registered prototype {prototype_id} to session {session_id}, bound to doc {document_id}")
         return description
+
+    def _parse_prototype_analysis(self, analysis_text: str, default_name: str) -> tuple:
+        """解析 GLM 返回的原型图分析结果"""
+        layout = ""
+        components = []
+        interactions = ""
+
+        # 尝试修复常见编码问题
+        try:
+            # 如果包含乱码特征，尝试修复
+            if 'ҳ' in analysis_text or '��' in analysis_text:
+                # GBK 乱码特征：尝试用 GBK 解码再编码为 UTF-8
+                try:
+                    fixed = analysis_text.encode('gbk', errors='ignore').decode('utf-8', errors='ignore')
+                    if fixed and '页面' in fixed:
+                        analysis_text = fixed
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        lines = analysis_text.split('\n')
+        current_section = None
+
+        # 预扫描：检测是否包含关键段落（兼容乱码情况）
+        has_name = any('1.' in l or '页面' in l or 'ҳ' in l for l in lines)
+        has_layout = any('2.' in l or '布局' in l or '���' in l for l in lines)
+        has_component = any('3.' in l or '组件' in l or '���б�' in l for l in lines)
+        has_interaction = any('4.' in l or '交互' in l or '����' in l for l in lines)
+
+        # 备用组件提取：全文关键词匹配
+        fallback_components = []
+        common_components = ['按钮', '输入框', '表单', '列表', '导航', '菜单', '卡片',
+                            '弹窗', '对话框', '图标', '图片', '文本', '搜索', '筛选',
+                            '标签', '轮播', '表格', '分页', '侧边栏', '底部导航', '头部',
+                            '导航栏', '状态', '下拉框', '表格', '标签页']
+        for comp in common_components:
+            if comp in analysis_text:
+                fallback_components.append(comp)
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # 识别章节标题（支持乱码变体）
+            lower_line = line.lower()
+            is_name = '1.' in lower_line or 'ҳ' in line or ('页面' in line and '名称' in line)
+            is_layout = '2.' in lower_line or '���' in line or '布局' in line
+            is_component = '3.' in lower_line or '���б�' in line or '组件' in line
+            is_interaction = '4.' in lower_line or '����' in line or '交互' in line
+
+            if is_name:
+                current_section = 'name'
+            elif is_layout:
+                current_section = 'layout'
+            elif is_component:
+                current_section = 'component'
+            elif is_interaction:
+                current_section = 'interaction'
+            elif has_interaction and not current_section:
+                # 如果文本中有"交互"相关内容但没有明确章节，尝试识别
+                if '交互' in line or '点击' in line or '跳转' in line or '弹窗' in line:
+                    current_section = 'interaction'
+            else:
+                # 解析内容
+                content = line.lstrip('-.*:、 ').strip()
+                if not content:
+                    continue
+
+                # 跳过无效内容
+                if any(content.startswith(x) for x in ['分析', '这张', '请', '请以', '###']):
+                    continue
+
+                if current_section == 'layout' or (current_section == 'name' and layout == ''):
+                    # 累积布局描述
+                    if layout:
+                        layout += ' ' + content
+                    else:
+                        layout = content
+                elif current_section == 'interaction':
+                    # 累积交互描述
+                    if interactions:
+                        interactions += ' ' + content
+                    else:
+                        interactions = content
+                elif current_section == 'component' or current_section is None:
+                    # 提取组件名称
+                    extracted = content
+                    if '(' in extracted:
+                        extracted = extracted.split('(')[0].strip()
+                    # 清理常见的格式前缀
+                    extracted = extracted.lstrip('**0123456789.、:：* ')
+                    if extracted and extracted not in components:
+                        components.append(extracted)
+
+        # 如果章节解析失败但有备用组件，使用备用
+        if not components and fallback_components:
+            components = fallback_components
+
+        # 如果仍然没有，添加默认组件
+        if not components:
+            components = ['待分析组件']
+
+        return layout, components, interactions
 
     def bind_prototype_to_document(
         self,

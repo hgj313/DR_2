@@ -174,8 +174,39 @@ def analyze_prd(content: str) -> str:
 
 
 @tool
-def analyze_prototype(image_path: str) -> str:
-    """分析原型图（需要图片路径）"""
+def analyze_prototype(image_path: str) -> dict:
+    """
+    分析原型图（需要图片路径）
+
+    Returns:
+        dict: 包含 status, page_name, layout, components, interactions, error 等字段
+    """
+    import os
+
+    # 检查文件是否存在
+    if not os.path.exists(image_path):
+        # 尝试多种路径组合
+        possible_paths = [
+            image_path,
+            os.path.join(os.getcwd(), image_path),
+            os.path.join(os.getcwd(), "prd-test", os.path.basename(image_path)),
+            os.path.join(os.getcwd(), "prd-test", image_path),
+        ]
+
+        found_path = None
+        for p in possible_paths:
+            if os.path.exists(p):
+                found_path = p
+                break
+
+        if not found_path:
+            return {
+                "status": "error",
+                "error": f"原型图文件不存在: {image_path}",
+                "tried_paths": possible_paths,
+            }
+        image_path = found_path
+
     glm = get_glm_model()
 
     prompt = """分析这张原型图，请提取：
@@ -189,9 +220,31 @@ def analyze_prototype(image_path: str) -> str:
 
     try:
         result = glm.analyze_image(image_path, prompt)
-        return result
+        return {
+            "status": "success",
+            "raw_result": result,
+            "image_path": image_path,
+        }
     except Exception as e:
-        return f"原型图分析失败: {str(e)}"
+        error_msg = str(e)
+        if "429" in error_msg:
+            return {
+                "status": "rate_limited",
+                "error": f"GLM API 限流 (429)，请稍后重试: {error_msg}",
+                "image_path": image_path,
+            }
+        elif "FileNotFoundError" in error_msg or "No such file" in error_msg:
+            return {
+                "status": "error",
+                "error": f"原型图文件无法读取: {error_msg}",
+                "image_path": image_path,
+            }
+        else:
+            return {
+                "status": "error",
+                "error": f"原型图分析失败: {error_msg}",
+                "image_path": image_path,
+            }
 
 
 @tool
