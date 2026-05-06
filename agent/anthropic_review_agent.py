@@ -107,17 +107,25 @@ class AnthropicReviewAgent:
                 })
         return tool_calls
 
-    def invoke(self, input: str, thread_id: str = None) -> dict:
+    def invoke(self, messages: list = None, thread_id: str = None) -> dict:
         """
         同步调用 Agent（返回完整消息）
+
+        Args:
+            messages: 可选，自定义消息列表。如果为 None，则使用 self.messages
+            thread_id: 未使用，保留接口兼容性
         """
-        self.messages = [{"role": "user", "content": input}]
+        if messages is not None:
+            # 使用传入的消息列表，不重置 self.messages
+            msg_list = messages
+        else:
+            msg_list = self.messages
 
         # 格式化 tools
         tools_formatted = self._format_tools()
         self.model.tools = tools_formatted
 
-        response = self.model.invoke(self.messages)
+        response = self.model.invoke(msg_list)
 
         # 解析工具调用
         tool_calls = self._parse_tool_calls(response)
@@ -286,6 +294,13 @@ class AnthropicReviewAgent:
                     )
                 elif chunk.type == AnthropicChunkType.MESSAGE_END:
                     pass
+
+            # 将 assistant 的文本回复添加到消息历史
+            if final_text:
+                self.messages.append({
+                    "role": "assistant",
+                    "content": "".join(final_text)
+                })
 
             response = self.model.invoke(self.messages)
             tool_calls = self._parse_tool_calls(response)

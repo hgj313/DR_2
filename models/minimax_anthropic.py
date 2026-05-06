@@ -145,6 +145,19 @@ class MiniMaxAnthropicModel:
                         formatted_content.append({"type": "text", "text": item})
                 formatted_messages.append({"role": role, "content": formatted_content})
 
+        # 调试：打印消息结构
+        import logging
+        _dbg_logger = logging.getLogger(__name__)
+        _dbg_logger.debug(f"[MiniMax] Calling API with {len(formatted_messages)} messages")
+        for i, msg in enumerate(formatted_messages):
+            role = msg.get("role")
+            content = msg.get("content")
+            if isinstance(content, list):
+                types = [c.get("type") if isinstance(c, dict) else str(c) for c in content]
+                _dbg_logger.debug(f"  [{i}] {role}: {types}")
+            else:
+                _dbg_logger.debug(f"  [{i}] {role}: {str(content)[:100]}")
+
         with self.client.messages.stream(
             model=self.model,
             system=system,

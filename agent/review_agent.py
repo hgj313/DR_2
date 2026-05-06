@@ -141,12 +141,19 @@ class ReviewAgent:
             if hasattr(last_msg, "type") and last_msg.type == "ai":
                 content = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
 
-                # 检查是否有工具调用（推理过程中的思考）
+                # 检查是否有工具调用
                 if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
                     tool_call = last_msg.tool_calls[0]
+                    tool_name = tool_call.get('name', 'unknown')
+                    tool_args = tool_call.get('args', {})
+                    # 格式化参数（截断过长的字符串）
+                    args_str = ", ".join(
+                        f"{k}={repr(v)[:50]}{'...' if len(str(v)) > 50 else ''}"
+                        for k, v in tool_args.items()
+                    )
                     return StreamChunk(
-                        type=StreamChunkType.THINKING,
-                        content=content,
+                        type=StreamChunkType.TOOL_CALL,
+                        content=f"{tool_name}({args_str})" if args_str else tool_name,
                         node="model",
                     )
 
@@ -185,9 +192,15 @@ class ReviewAgent:
                     last_msg = messages[-1]
                     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
                         tool_call = last_msg.tool_calls[0]
+                        tool_name = tool_call.get('name', 'unknown')
+                        tool_args = tool_call.get('args', {})
+                        args_str = ", ".join(
+                            f"{k}={repr(v)[:50]}{'...' if len(str(v)) > 50 else ''}"
+                            for k, v in tool_args.items()
+                        )
                         return StreamChunk(
-                            type=StreamChunkType.THINKING,
-                            content=f"调用工具: {tool_call.get('name', 'unknown')}",
+                            type=StreamChunkType.TOOL_CALL,
+                            content=f"{tool_name}({args_str})" if args_str else tool_name,
                             node=node_name,
                         )
                     if hasattr(last_msg, "content") and last_msg.content:
