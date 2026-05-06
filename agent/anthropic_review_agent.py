@@ -199,6 +199,9 @@ class AnthropicReviewAgent:
         tools_formatted = self._format_tools()
         self.model.tools = tools_formatted
 
+        # 调试：打印初始消息
+        print(f"[DEBUG] 初始消息数量: {len(self.messages)}")
+
         # 用于累积完整内容
         thinking_buffer = []
         text_buffer = []
@@ -276,6 +279,15 @@ class AnthropicReviewAgent:
                 })
 
             # 继续调用模型
+            print(f"[DEBUG] 调用前消息数量: {len(self.messages)}")
+            for i, msg in enumerate(self.messages):
+                role = msg.get("role")
+                content = msg.get("content")
+                if isinstance(content, list):
+                    types = [c.get("type") if isinstance(c, dict) else "str" for c in content]
+                    print(f"[DEBUG]   [{i}] {role}: {types}")
+                else:
+                    print(f"[DEBUG]   [{i}] {role}: {str(content)[:80]}...")
             for chunk in self.model.stream(self.messages):
                 if chunk.type == AnthropicChunkType.THINKING:
                     thinking_buffer.append(chunk.content)

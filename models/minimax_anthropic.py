@@ -158,7 +158,8 @@ class MiniMaxAnthropicModel:
             else:
                 _dbg_logger.debug(f"  [{i}] {role}: {str(content)[:100]}")
 
-        with self.client.messages.stream(
+        # 使用非流式接口（避免 SDK 流式处理与 MiniMax API 不兼容）
+        response = self.client.messages.create(
             model=self.model,
             system=system,
             messages=formatted_messages,
@@ -166,9 +167,29 @@ class MiniMaxAnthropicModel:
             max_tokens=self.max_tokens,
             thinking={"type": "enabled"} if self.thinking_enabled else None,
             tools=self.tools if self.tools else None,
-        ) as stream:
-            for chunk in stream:
-                yield from self._parse_stream_chunk(chunk)
+        )
+
+        # 将完整响应转换为 chunks（模拟流式输出）
+        for block in response.content:
+            if hasattr(block, 'thinking') and block.thinking:
+                yield AnthropicStreamChunk(
+                    type=StreamChunkType.THINKING,
+                    content=block.thinking,
+                )
+            if hasattr(block, 'text') and block.text:
+                yield AnthropicStreamChunk(
+                    type=StreamChunkType.TEXT,
+                    content=block.text,
+                )
+            if block.type == "tool_use":
+                yield AnthropicStreamChunk(
+                    type=StreamChunkType.TOOL_CALL,
+                    content=f"[tool_use: {getattr(block, 'name', '')}]",
+                )
+        yield AnthropicStreamChunk(
+            type=StreamChunkType.MESSAGE_END,
+            content="[completed]",
+        )
 
     def _parse_stream_chunk(self, chunk) -> Iterator[AnthropicStreamChunk]:
         """解析单个流式 chunk"""

@@ -273,7 +273,30 @@ def generate_report(
         {"role": "user", "content": prompt},
     ])
 
-    return response.content if hasattr(response, 'content') else str(response)
+    # 处理 LangChain AIMessage 对象的 content（可能是字符串或列表）
+    content = response.content if hasattr(response, 'content') else str(response)
+    if isinstance(content, list):
+        # 提取纯文本，过滤掉思考内容
+        text_parts = []
+        for block in content:
+            if isinstance(block, dict):
+                block_type = block.get("type", "")
+                if block_type == "text":
+                    text_parts.append(block.get("text", ""))
+                elif block_type == "thinking":
+                    # 跳过思考内容
+                    pass
+            elif isinstance(block, str):
+                text_parts.append(block)
+        content = "\n".join(text_parts)
+    elif isinstance(content, str):
+        # 过滤掉思考内容标记
+        import re
+        # 移除 <think>...</think> 模式
+        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+
+        content = content.strip()
+    return content
 
 
 @tool
