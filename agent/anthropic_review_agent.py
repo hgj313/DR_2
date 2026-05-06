@@ -231,9 +231,11 @@ class AnthropicReviewAgent:
         # 处理工具调用
         while tool_calls:
             for tc in tool_calls:
+                # 格式化工具参数用于显示
+                tool_input_str = json.dumps(tc['input'], ensure_ascii=False)
                 yield StreamChunk(
                     type=StreamChunkType.TOOL_CALL,
-                    content=f"调用工具: {tc['name']}",
+                    content=f"调用工具: {tc['name']}\n参数: {tool_input_str}",
                     node="model",
                 )
 

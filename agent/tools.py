@@ -84,18 +84,17 @@ def retrieve_prd_chunks(query: str, document_id: str = None, k: int = 10) -> str
     embedder = BgeM3Embeddings()
     query_embedding = embedder.embed_query(query)
 
-    results = store.similarity_search(query_embedding, k=k)
+    # 构建过滤条件
+    filter_cond = {"document_id": document_id} if document_id else None
+    # 多取一些，因为过滤在数据库层做了
+    results = store.similarity_search(query_embedding, k=k, filter=filter_cond)
 
     if not results:
-        return "未找到相关的 PRD 文档内容"
+        return "未找到相关的 PRD 文档内容" if not document_id else f"未找到文档 {document_id} 相关的内容"
 
     formatted = []
     for doc, score in results:
         meta = doc.metadata
-        # 如果指定了 document_id，进行过滤
-        if document_id and meta.get("document_id") != document_id:
-            continue
-
         heading = meta.get("heading", "未命名")
         chunk_idx = meta.get("chunk_index", "?")
         header_path = meta.get("header_path", "")
@@ -106,9 +105,6 @@ def retrieve_prd_chunks(query: str, document_id: str = None, k: int = 10) -> str
             f"{doc.page_content[:500]}"
             f"{'...' if len(doc.page_content) > 500 else ''}"
         )
-
-    if not formatted:
-        return "未找到与查询相关的 PRD 文档内容"
 
     return "\n\n".join(formatted[:k])
 

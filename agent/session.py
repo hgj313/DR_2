@@ -2,8 +2,11 @@
 
 import uuid
 import logging
+import sqlite3
+import json
 from pathlib import Path
 from typing import Optional
+from contextlib import contextmanager
 
 from agent.schemas import (
     ReviewSession,
@@ -28,6 +31,7 @@ class ReviewSessionManager:
     - 上传/注册原型图（支持绑定 document_id）
     - 绑定/解绑 PRD 与原型图的关联
     - 支持纠错：已绑定的可以解绑重新绑定
+    - SQLite 持久化 session 元数据
     """
 
     def __init__(self, chroma_persist_dir: str = "./chroma_data"):
@@ -37,11 +41,161 @@ class ReviewSessionManager:
         self.embedder = BgeM3Embeddings()
         self.chunker = ProductStandardChunker(chunk_size=600, overlap=90)
 
+        # SQLite 持久化
+        self._db_path = Path(chroma_persist_dir) / "sessions.db"
+        self._init_db()
+        self._load_sessions()
+
+    @contextmanager
+    def _get_db(self):
+        """获取数据库连接上下文"""
+        conn = sqlite3.connect(self._db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _init_db(self):
+        """初始化数据库表"""
+        with self._get_db() as conn:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    document_id TEXT,
+                    document_file_name TEXT,
+                    document_file_path TEXT,
+                    document_chunk_ids TEXT,
+                    document_metadata TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS prototypes (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    document_id TEXT,
+                    page_name TEXT,
+                    layout TEXT,
+                    components TEXT,
+                    interactions TEXT,
+                    query_text TEXT,
+                    image_path TEXT,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
+            """)
+            conn.commit()
+
+    def _load_sessions(self):
+        """从数据库加载 session"""
+        with self._get_db() as conn:
+            rows = conn.execute("SELECT * FROM sessions").fetchall()
+            for row in rows:
+                session_id = row["session_id"]
+
+                # 重建 DocumentInfo
+                document = None
+                if row["document_id"]:
+                    chunk_ids = json.loads(row["document_chunk_ids"] or "[]")
+                    metadata = json.loads(row["document_metadata"] or "{}")
+                    document = DocumentInfo(
+                        document_id=row["document_id"],
+                        file_name=row["document_file_name"] or "",
+                        file_path=row["document_file_path"] or "",
+                        chunk_ids=chunk_ids,
+                        metadata=metadata,
+                    )
+
+                # 重建 Session 对象
+                import datetime
+                session = ReviewSession(
+                    session_id=session_id,
+                    status=row["status"],
+                    created_at=datetime.datetime.fromisoformat(row["created_at"]),
+                    updated_at=datetime.datetime.fromisoformat(row["updated_at"]),
+                    document=document,
+                )
+
+                # 加载 prototypes
+                proto_rows = conn.execute(
+                    "SELECT * FROM prototypes WHERE session_id = ?", (session_id,)
+                ).fetchall()
+                for pr in proto_rows:
+                    session.prototypes.append(PrototypeDescription(
+                        id=pr["id"],
+                        name=pr["name"],
+                        document_id=pr["document_id"],
+                        page_name=pr["page_name"] or "",
+                        layout=pr["layout"] or "",
+                        components=json.loads(pr["components"] or "[]"),
+                        interactions=pr["interactions"] or "",
+                        query_text=pr["query_text"] or "",
+                        image_path=pr["image_path"] or "",
+                    ))
+
+                self.sessions[session_id] = session
+
+        logger.info(f"Loaded {len(self.sessions)} sessions from database")
+
+    def _save_session(self, session: ReviewSession):
+        """保存单个 session 到数据库"""
+        with self._get_db() as conn:
+            document_chunk_ids = json.dumps([c for c in session.document.chunk_ids]) if session.document else "[]"
+            document_metadata = json.dumps(session.document.metadata if session.document else {})
+
+            conn.execute("""
+                INSERT OR REPLACE INTO sessions
+                (session_id, status, created_at, updated_at, document_id, document_file_name,
+                 document_file_path, document_chunk_ids, document_metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                session.session_id,
+                session.status,
+                session.created_at.isoformat(),
+                session.updated_at.isoformat(),
+                session.document.document_id if session.document else None,
+                session.document.file_name if session.document else None,
+                session.document.file_path if session.document else None,
+                document_chunk_ids,
+                document_metadata,
+            ))
+            conn.commit()
+
+    def _save_prototypes(self, session_id: str, prototypes: list[PrototypeDescription]):
+        """保存 prototypes 到数据库"""
+        with self._get_db() as conn:
+            # 删除旧的 prototypes
+            conn.execute("DELETE FROM prototypes WHERE session_id = ?", (session_id,))
+
+            # 插入新的
+            for p in prototypes:
+                conn.execute("""
+                    INSERT INTO prototypes
+                    (id, session_id, name, document_id, page_name, layout, components,
+                     interactions, query_text, image_path)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    p.id,
+                    session_id,
+                    p.name,
+                    p.document_id,
+                    p.page_name,
+                    p.layout,
+                    json.dumps(p.components),
+                    p.interactions,
+                    p.query_text,
+                    p.image_path,
+                ))
+            conn.commit()
+
     def create_session(self) -> str:
         """创建新的审查会话"""
         session_id = str(uuid.uuid4())[:8]
         session = ReviewSession(session_id=session_id)
         self.sessions[session_id] = session
+        self._save_session(session)
         logger.info(f"Created session: {session_id}")
         return session_id
 
@@ -125,6 +279,7 @@ class ReviewSessionManager:
         # 更新会话
         session.document = doc_info
         session.updated_at = __import__("datetime").datetime.now()
+        self._save_session(session)
 
         logger.info(f"Registered PRD {document_id} to session {session_id}: {len(stored_chunk_ids)} chunks")
         return doc_info
@@ -207,6 +362,8 @@ class ReviewSessionManager:
         # 添加到会话
         session.prototypes.append(description)
         session.updated_at = __import__("datetime").datetime.now()
+        self._save_session(session)
+        self._save_prototypes(session_id, session.prototypes)
 
         logger.info(f"Registered prototype {prototype_id} to session {session_id}, bound to doc {document_id}")
         return description
@@ -349,6 +506,8 @@ class ReviewSessionManager:
                 self.prototype_store.update_document_id(prototype_id, document_id)
 
                 session.updated_at = __import__("datetime").datetime.now()
+                self._save_session(session)
+                self._save_prototypes(session_id, session.prototypes)
                 logger.info(f"Bound prototype {prototype_id} to document {document_id}")
                 return True
 
@@ -377,6 +536,8 @@ class ReviewSessionManager:
                 self.prototype_store.update_document_id(prototype_id, None)
 
                 session.updated_at = __import__("datetime").datetime.now()
+                self._save_session(session)
+                self._save_prototypes(session_id, session.prototypes)
                 logger.info(f"Unbound prototype {prototype_id} from document {old_doc_id}")
                 return True
 

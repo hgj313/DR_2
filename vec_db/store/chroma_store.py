@@ -145,13 +145,15 @@ class ChromaStore:
     def similarity_search(
         self,
         embedding: list[float] | list[list[float]],
-        k: int = 5
+        k: int = 5,
+        filter: dict = None,
     ) -> list[tuple[LangChainDocument, float]] | list[list[tuple[LangChainDocument, float]]]:
         """查找与查询嵌入向量最相似的文档
 
         Args:
             embedding: 查询嵌入向量（单向量）或向量列表（批量查询）.
             k: 返回的结果数量.
+            filter: 可选，ChromaDB where 过滤条件，如 {"document_id": "xxx"}.
 
         Returns:
             单向量查询: 文档-相似元组列表.
@@ -163,10 +165,14 @@ class ChromaStore:
         if not embeddings:
             return [] if is_single_query else [[]]
 
-        results = self._collection.query(
-            query_embeddings=embeddings,
-            n_results=k,
-        )
+        query_kwargs = {
+            "query_embeddings": embeddings,
+            "n_results": k,
+        }
+        if filter:
+            query_kwargs["where"] = filter
+
+        results = self._collection.query(**query_kwargs)
 
         num_queries = len(results.get("ids", []))
         all_results = []
