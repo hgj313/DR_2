@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncGenerator, Iterator, Callable
+from typing import AsyncGenerator, Iterator
 
 from models.minimax_anthropic import (
     MiniMaxAnthropicModel,

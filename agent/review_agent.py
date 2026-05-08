@@ -1,10 +1,15 @@
 """ReviewAgent - PRD 和原型图审查 Agent"""
 
+import json
+import os
+import sqlite3
+import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import AsyncGenerator
 from langchain.agents import create_agent
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from models.minimax import MiniMaxModel
 from agent.tools import get_all_tools
@@ -18,6 +23,7 @@ class StreamChunkType(str, Enum):
     TOOL_RESULT = "tool_result"  # 工具返回结果
     FINAL = "final"           # 最终回复
     STATUS = "status"         # 状态信息（如进入某个节点）
+    ERROR = "error"           # 错误信息（如未授权的工具调用）
 
 
 @dataclass
@@ -33,6 +39,16 @@ class StreamChunk:
             prefix += f" [{self.node}]"
         if isinstance(self.content, str):
             return f"{prefix} {self.content}"
+        if isinstance(self.content, dict):
+            if self.type == StreamChunkType.TOOL_CALL:
+                name = self.content.get("name", "unknown")
+                params = self.content.get("parameters", {})
+                params_str = ", ".join(f"{k}={repr(v)}" for k, v in params.items())
+                return f"{prefix} {name}({params_str})"
+            elif self.type == StreamChunkType.TOOL_RESULT:
+                return f"{prefix} {self.content}"
+            else:
+                return f"{prefix} {json.dumps(self.content, ensure_ascii=False)}"
         return f"{prefix} {self.content}"
 
 
@@ -40,15 +56,20 @@ class ReviewAgent:
     """PRD & 原型图审查 Agent"""
 
     def __init__(self):
-        # 初始化 MiniMax 模型
+        checkpoint_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "chroma_data")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        db_path = os.path.join(checkpoint_dir, "checkpoints.db")
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.sync_checkpointer = SqliteSaver(conn)
+        self.db_path = db_path
+
         self.model = MiniMaxModel()
 
-        # 创建 ReAct Agent
         self.agent = create_agent(
             model=self.model.chat,
             tools=get_all_tools(),
             system_prompt=REVIEW_AGENT_PROMPT,
-            checkpointer=MemorySaver(),
+            checkpointer=self.sync_checkpointer,
         )
 
     def invoke(self, input: str, thread_id: str = None) -> dict:
@@ -63,15 +84,27 @@ class ReviewAgent:
         )
         return result
 
-    async def ainvoke(self, input: str, config: dict = None) -> dict:
+    async def ainvoke(self, input: str, config: dict = None, thread_id: str = None) -> dict:
         """异步调用 Agent"""
+        if thread_id is None:
+            thread_id = str(uuid.uuid4())
+        
         if config is None:
-            config = {}
+            config = {"configurable": {"thread_id": thread_id}}
+        elif "configurable" not in config:
+            config["configurable"] = {"thread_id": thread_id}
 
-        result = await self.agent.ainvoke(
-            {"messages": [{"role": "user", "content": input}]},
-            config,
-        )
+        async with AsyncSqliteSaver.from_conn_string(self.db_path) as async_checkpointer:
+            async_agent = create_agent(
+                model=self.model.chat,
+                tools=get_all_tools(),
+                system_prompt=REVIEW_AGENT_PROMPT,
+                checkpointer=async_checkpointer,
+            )
+            result = await async_agent.ainvoke(
+                {"messages": [{"role": "user", "content": input}]},
+                config,
+            )
         return result
 
     def stream(self, input: str, thread_id: str = None):
@@ -81,17 +114,18 @@ class ReviewAgent:
         Yields:
             StreamChunk: 带有类型标识的流式输出
         """
-        config = {"stream_mode": "messages"}
-        if thread_id:
-            config["configurable"] = {"thread_id": thread_id}
+        if thread_id is None:
+            thread_id = str(uuid.uuid4())
+        
+        config = {"stream_mode": "updates", "configurable": {"thread_id": thread_id}}
 
-        # 工具名称映射（用于识别工具调用）
         tool_names = {tool.name for tool in get_all_tools()}
 
         for event in self.agent.stream(
             {"messages": [{"role": "user", "content": input}]},
             config,
         ):
+            print(f"[DEBUG] event type: {type(event)}, event: {repr(event)[:200]}")
             chunk = self._parse_stream_event(event, tool_names)
             if chunk:
                 yield chunk
@@ -103,26 +137,34 @@ class ReviewAgent:
         Yields:
             StreamChunk: 带有类型标识的流式输出
         """
-        config = {"stream_mode": "messages"}
-        if thread_id:
-            config["configurable"] = {"thread_id": thread_id}
+        if thread_id is None:
+            thread_id = str(uuid.uuid4())
+        
+        config = {"stream_mode": "updates", "configurable": {"thread_id": thread_id}}
 
         tool_names = {tool.name for tool in get_all_tools()}
 
-        async for event in self.agent.astream(
-            {"messages": [{"role": "user", "content": input}]},
-            config,
-        ):
-            chunk = self._parse_stream_event(event, tool_names)
-            if chunk:
-                yield chunk
+        async with AsyncSqliteSaver.from_conn_string(self.db_path) as async_checkpointer:
+            async_agent = create_agent(
+                model=self.model.chat,
+                tools=get_all_tools(),
+                system_prompt=REVIEW_AGENT_PROMPT,
+                checkpointer=async_checkpointer,
+            )
+            async for event in async_agent.astream(
+                {"messages": [{"role": "user", "content": input}]},
+                config,
+            ):
+                chunk = self._parse_stream_event(event, tool_names)
+                if chunk:
+                    yield chunk
 
-    def _parse_stream_event(self, event: dict, tool_names: set) -> StreamChunk | None:
+    def _parse_stream_event(self, event: dict | tuple, tool_names: set) -> StreamChunk | None:
         """
         解析流式事件，识别类型
 
         Args:
-            event: LangGraph stream 事件
+            event: LangGraph stream 事件（updates模式为dict，messages模式为tuple）
             tool_names: 可用工具名称集合
 
         Returns:
@@ -145,8 +187,15 @@ class ReviewAgent:
                 if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
                     tool_call = last_msg.tool_calls[0]
                     tool_name = tool_call.get('name', 'unknown')
+
+                    if tool_name not in tool_names:
+                        return StreamChunk(
+                            type=StreamChunkType.ERROR,
+                            content=f"未授权的工具调用: {tool_name}",
+                            node="model",
+                        )
+
                     tool_args = tool_call.get('args', {})
-                    # 格式化参数（截断过长的字符串）
                     args_str = ", ".join(
                         f"{k}={repr(v)[:50]}{'...' if len(str(v)) > 50 else ''}"
                         for k, v in tool_args.items()
@@ -193,6 +242,14 @@ class ReviewAgent:
                     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
                         tool_call = last_msg.tool_calls[0]
                         tool_name = tool_call.get('name', 'unknown')
+
+                        if tool_name not in tool_names:
+                            return StreamChunk(
+                                type=StreamChunkType.ERROR,
+                                content=f"未授权的工具调用: {tool_name}",
+                                node=node_name,
+                            )
+
                         tool_args = tool_call.get('args', {})
                         args_str = ", ".join(
                             f"{k}={repr(v)[:50]}{'...' if len(str(v)) > 50 else ''}"

@@ -55,52 +55,6 @@ class ChromaStore:
             metadata={"hnsw:space": "cosine"},
         )
 
-    def check_by_content_hash(self, content_hash: str) -> dict | None:
-        """通过内容哈希检查chunk是否存在
-        
-        Args:
-            content_hash: 内容哈希值
-        
-        Returns:
-            存在的chunk信息（包含id和metadata），不存在返回None
-        """
-        try:
-            results = self._collection.get(
-                where={"content_hash": content_hash},
-                include=["metadatas", "documents"]
-            )
-            
-            if results and results.get("ids") and len(results["ids"]) > 0:
-                return {
-                    "id": results["ids"][0],
-                    "metadata": results["metadatas"][0] if results.get("metadatas") else {},
-                    "content": results["documents"][0] if results.get("documents") else ""
-                }
-            return None
-        except Exception as e:
-            logger.warning(f"Error checking content hash: {e}")
-            return None
-    
-    def get_all_content_hashes(self) -> set[str]:
-        """获取所有已存储的内容哈希
-        
-        Returns:
-            所有content_hash的集合
-        """
-        try:
-            results = self._collection.get(include=["metadatas"])
-            hashes = set()
-            
-            if results and results.get("metadatas"):
-                for metadata in results["metadatas"]:
-                    if metadata and "content_hash" in metadata:
-                        hashes.add(metadata["content_hash"])
-            
-            return hashes
-        except Exception as e:
-            logger.warning(f"Error getting content hashes: {e}")
-            return set()
-    
     def store_chunk(self, chunk: Chunk) -> None:
         """持久化存储一个文档的分块（保留完整元数据）
         

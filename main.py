@@ -10,10 +10,9 @@ from agent.review_agent import (
 )
 from agent.anthropic_review_agent import (
     create_anthropic_review_agent,
-    StreamChunk as AnthropicStreamChunk,
-    StreamChunkType as AnthropicStreamChunkType,
 )
 from agent.session import get_session_manager
+from agent.schemas import ReviewSession
 
 
 # ANSI 颜色码
@@ -28,60 +27,64 @@ class Colors:
 
 
 def print_chunk(chunk, use_color: bool = True):
-    """根据 chunk 类型格式化输出（支持新旧两种 StreamChunk）"""
+    """根据 chunk 类型格式化输出（统一支持新旧两种 StreamChunk）"""
     color = ""
     prefix = ""
+    end = "\n"
+    flush = False
 
-    # 获取 chunk type（兼容新旧两种类型）
-    chunk_type = chunk.type if hasattr(chunk, 'type') else str(chunk.type)
+    # 统一转换为字符串值进行比较（兼容新旧两种枚举类型）
+    if hasattr(chunk.type, 'value'):
+        chunk_type = chunk.type.value
+    else:
+        chunk_type = str(chunk.type)
 
-    # Anthropic 原生 TEXT 类型
-    if chunk_type == AnthropicStreamChunkType.TEXT:
+    if chunk_type == "text":
         if use_color:
             color = Colors.TEXT
             prefix = "📝 文本"
         else:
             prefix = "[文本]"
-        content = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
-        print(f"{color}{prefix}: {content}{Colors.RESET if use_color else ''}", end="", flush=True)
-        return
-
-    # 使用旧版 StreamChunkType
-    if use_color:
-        if chunk_type == StreamChunkType.THINKING:
+        end = ""
+        flush = True
+    elif chunk_type == "thinking":
+        if use_color:
             color = Colors.THINKING
             prefix = "🤔 思考"
-        elif chunk_type == StreamChunkType.TOOL_CALL:
+        else:
+            prefix = "[思考]"
+    elif chunk_type == "tool_call":
+        if use_color:
             color = Colors.TOOL
             prefix = "🔧 工具调用"
-        elif chunk_type == StreamChunkType.TOOL_RESULT:
+        else:
+            prefix = "[工具调用]"
+    elif chunk_type == "tool_result":
+        if use_color:
             color = Colors.RESULT
             prefix = "📋 工具结果"
-        elif chunk_type == StreamChunkType.FINAL:
+        else:
+            prefix = "[工具结果]"
+    elif chunk_type == "final":
+        if use_color:
             color = Colors.FINAL
             prefix = "✨ 最终回复"
-        elif chunk_type == StreamChunkType.STATUS:
+        else:
+            prefix = "[最终]"
+    elif chunk_type == "status":
+        if use_color:
             color = Colors.STATUS
             prefix = "⏳ 状态"
-    else:
-        if chunk_type == StreamChunkType.THINKING:
-            prefix = "[思考]"
-        elif chunk_type == StreamChunkType.TOOL_CALL:
-            prefix = "[工具调用]"
-        elif chunk_type == StreamChunkType.TOOL_RESULT:
-            prefix = "[工具结果]"
-        elif chunk_type == StreamChunkType.FINAL:
-            prefix = "[最终]"
-        elif chunk_type == StreamChunkType.STATUS:
+        else:
             prefix = "[状态]"
 
     reset = Colors.RESET if use_color else ""
     content = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
 
-    print(f"{color}{prefix}: {content}{reset}")
+    print(f"{color}{prefix}: {content}{reset}", end=end, flush=flush)
 
 
-def stream_review(agent, session_id: str, session, use_color: bool = True):
+def stream_review(agent, session_id: str, session: ReviewSession, use_color: bool = True):
     """流式审查会话"""
     context_parts = ["请审查以下内容:"]
 
@@ -106,47 +109,32 @@ def stream_review(agent, session_id: str, session, use_color: bool = True):
     print("开始流式审查...")
     print("=" * 60 + "\n")
 
-    # 用于累积 thinking 内容
-    thinking_buffer = []
-
     for chunk in agent.stream(user_msg, thread_id=session_id):
-        chunk_type = chunk.type if hasattr(chunk, 'type') else str(chunk.type)
+        chunk_type = chunk.type.value if hasattr(chunk.type, 'value') else str(chunk.type)
 
-        # Anthropic TEXT 类型（流式文本输出，不换行）
-        if chunk_type == AnthropicStreamChunkType.TEXT:
+        if chunk_type == "thinking":
             print_chunk(chunk, use_color)
-
-        elif chunk_type == StreamChunkType.THINKING or chunk_type == "thinking":
-            # 思考内容直接打印，不累积
-            print_chunk(chunk, use_color)
-            print()  # 思考后空一行
-
-        elif chunk_type == StreamChunkType.TOOL_RESULT:
-            # 工具结果打印工具名和结果摘要
+            print()
+        elif chunk_type == "tool_result":
             if isinstance(chunk.content, dict):
                 tool_name = chunk.content.get("tool", "unknown")
                 result = chunk.content.get("result", "")
-                # 截断过长结果
                 if len(result) > 200:
                     result = result[:200] + "..."
                 print(f"{Colors.TOOL if use_color else ''}🔧 调用工具: {tool_name}{Colors.RESET if use_color else ''}")
                 print(f"{Colors.RESULT if use_color else ''}📋 结果: {result}{Colors.RESET if use_color else ''}")
                 print()
-
-        elif chunk_type == StreamChunkType.TOOL_CALL or chunk_type == "tool_call":
+        elif chunk_type == "tool_call":
             print_chunk(chunk, use_color)
             print()
-
-        elif chunk_type == StreamChunkType.FINAL or chunk_type == "final":
-            # 最终回复加个边框
+        elif chunk_type == "final":
             print(f"{Colors.FINAL if use_color else ''}{'=' * 60}{Colors.RESET if use_color else ''}")
             print(f"{Colors.FINAL if use_color else ''}审查报告:{Colors.RESET if use_color else ''}")
             print(f"{Colors.FINAL if use_color else ''}{'=' * 60}{Colors.RESET if use_color else ''}")
             print()
             print_chunk(chunk, use_color)
             print()
-
-        elif chunk_type == StreamChunkType.STATUS or chunk_type == "status":
+        else:
             print_chunk(chunk, use_color)
 
 
@@ -374,8 +362,16 @@ def main():
                             print(message.content)
                     print()
             else:
-                print("请先创建或选择会话 (new / session <id>)")
-                continue
+                # 非命令输入：自动创建会话并发送
+                session_id = session_mgr.create_session()
+                current_session_id = session_id
+                use_color = "--no-color" not in parts
+                print(f"[自动创建会话: {session_id}]")
+                print(f"[发送消息: {user_input[:50]}{'...' if len(user_input) > 50 else ''}]")
+                print()
+                for chunk in agent.stream(user_input, thread_id=session_id):
+                    print_chunk(chunk, use_color)
+                print()
 
         except KeyboardInterrupt:
             print("\n再见!")

@@ -145,19 +145,6 @@ class MiniMaxAnthropicModel:
                         formatted_content.append({"type": "text", "text": item})
                 formatted_messages.append({"role": role, "content": formatted_content})
 
-        # 调试：打印消息结构
-        import logging
-        _dbg_logger = logging.getLogger(__name__)
-        _dbg_logger.debug(f"[MiniMax] Calling API with {len(formatted_messages)} messages")
-        for i, msg in enumerate(formatted_messages):
-            role = msg.get("role")
-            content = msg.get("content")
-            if isinstance(content, list):
-                types = [c.get("type") if isinstance(c, dict) else str(c) for c in content]
-                _dbg_logger.debug(f"  [{i}] {role}: {types}")
-            else:
-                _dbg_logger.debug(f"  [{i}] {role}: {str(content)[:100]}")
-
         # 使用非流式接口（避免 SDK 流式处理与 MiniMax API 不兼容）
         response = self.client.messages.create(
             model=self.model,
@@ -190,82 +177,6 @@ class MiniMaxAnthropicModel:
             type=StreamChunkType.MESSAGE_END,
             content="[completed]",
         )
-
-    def _parse_stream_chunk(self, chunk) -> Iterator[AnthropicStreamChunk]:
-        """解析单个流式 chunk"""
-        chunk_type = getattr(chunk, "type", None)
-
-        if chunk_type == "message_start":
-            yield AnthropicStreamChunk(
-                type=StreamChunkType.MESSAGE_START,
-                content="",
-            )
-
-        elif chunk_type == "content_block_start":
-            content_block = getattr(chunk, "content_block", None)
-            if content_block:
-                block_type = getattr(content_block, "type", None)
-                if block_type == "thinking":
-                    yield AnthropicStreamChunk(
-                        type=StreamChunkType.THINKING,
-                        content="[thinking started]",
-                    )
-                elif block_type == "text":
-                    yield AnthropicStreamChunk(
-                        type=StreamChunkType.TEXT,
-                        content="[text started]",
-                    )
-                elif block_type == "tool_use":
-                    yield AnthropicStreamChunk(
-                        type=StreamChunkType.TOOL_CALL,
-                        content="[tool_use started]",
-                    )
-
-        elif chunk_type == "content_block_delta":
-            delta = getattr(chunk, "delta", None)
-            if delta:
-                delta_type = getattr(delta, "type", None)
-
-                if delta_type == "thinking_delta":
-                    thinking_content = getattr(delta, "thinking", "")
-                    if thinking_content:
-                        yield AnthropicStreamChunk(
-                            type=StreamChunkType.THINKING,
-                            content=thinking_content,
-                        )
-
-                elif delta_type == "text_delta":
-                    text_content = getattr(delta, "text", "")
-                    if text_content:
-                        yield AnthropicStreamChunk(
-                            type=StreamChunkType.TEXT,
-                            content=text_content,
-                        )
-
-                elif delta_type == "tool_use_delta":
-                    # 工具调用增量
-                    tool_name = getattr(delta, "name", "")
-                    tool_input = getattr(delta, "input", "")
-                    if tool_name:
-                        yield AnthropicStreamChunk(
-                            type=StreamChunkType.TOOL_CALL,
-                            content=f"[tool_call: {tool_name}]",
-                        )
-
-        elif chunk_type == "message_delta":
-            delta = getattr(chunk, "delta", None)
-            if delta:
-                if hasattr(delta, "stop_reason"):
-                    yield AnthropicStreamChunk(
-                        type=StreamChunkType.MESSAGE_END,
-                        content=f"[stop_reason: {delta.stop_reason}]",
-                    )
-
-        elif chunk_type == "message_stop":
-            yield AnthropicStreamChunk(
-                type=StreamChunkType.MESSAGE_END,
-                content="[stream completed]",
-            )
 
     async def ainvoke(self, messages: list[dict]) -> Message:
         """异步调用"""
