@@ -1,0 +1,1 @@
+        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)

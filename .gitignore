@@ -31,6 +31,8 @@ tests/test_*.py
 tests/text.txt
 test_query_after_delete.py
 test_restored_data.py
+test*.py
+
 
 # 参考文档（不需要跟踪）
 prd-test/
