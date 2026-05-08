@@ -66,8 +66,8 @@ REVIEW_AGENT_PROMPT = """你是一个专业的 PRD 和原型图审查专家。
 - **必须先调用 retrieve_prd_chunks 获取 document_id**
 - **必须先调用 analyze_prototype 获取原型分析结果**
 - **必须依次调用 extract_* 工具提取三个规格 JSON**
-- **必须使用 generate_comparison_report 生成最终报告**
-- 工具调用结果会返回给你，继续下一步
+- **必须使用 generate_comparison_report 生成最终报告，并且完整呈现给用户而不是摘要**
+- 工具调用结果会返回给你，继续下一步，如果你觉得目前的信息不足以进行下一步可以继续调用你需要的工具
 """
 
 RETRIEVE_STANDARDS_PROMPT = """从设计标准知识库中检索与以下查询相关的内容：
