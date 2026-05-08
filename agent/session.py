@@ -21,6 +21,15 @@ from vec_db.store.prototype_store import PrototypeStore
 logger = logging.getLogger(__name__)
 
 
+def _row_val(row: sqlite3.Row, key: str, default=None):
+    """安全获取 sqlite3.Row 的值（兼容旧数据库中不存在的列）"""
+    try:
+        val = row[key]
+        return val if val is not None else default
+    except (IndexError, KeyError):
+        return default
+
+
 class ReviewSessionManager:
     """
     审查会话管理器
@@ -57,9 +66,10 @@ class ReviewSessionManager:
             conn.close()
 
     def _init_db(self):
-        """初始化数据库表"""
+        """初始化数据库表（支持旧数据库迁移）"""
         with self._get_db() as conn:
-            conn.executescript("""
+            # 创建 sessions 表
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
@@ -70,22 +80,62 @@ class ReviewSessionManager:
                     document_file_path TEXT,
                     document_chunk_ids TEXT,
                     document_metadata TEXT
-                );
+                )
+            """)
 
+            # 创建 prototypes 表
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS prototypes (
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
                     name TEXT NOT NULL,
                     document_id TEXT,
                     page_name TEXT,
-                    layout TEXT,
-                    components TEXT,
-                    interactions TEXT,
+                    layout TEXT DEFAULT '',
+                    components TEXT DEFAULT '[]',
+                    interactions TEXT DEFAULT '',
                     query_text TEXT,
                     image_path TEXT,
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-                );
+                )
             """)
+
+            # 迁移旧 prototypes 表：添加新列（如果不存在）
+            new_columns = [
+                ("page_type", "TEXT"),
+                ("fidelity_level", "TEXT"),
+                ("module_path", "TEXT"),
+                ("layout_type", "TEXT"),
+                ("min_resolution", "TEXT"),
+                ("primary_color", "TEXT"),
+                ("font_hierarchy", "TEXT"),
+                ("component_spacing", "TEXT"),
+                ("button_types", "TEXT"),
+                ("form_fields_per_row", "INTEGER"),
+                ("table_column_count", "INTEGER"),
+                ("table_page_size", "INTEGER"),
+                ("popup_types", "TEXT"),
+                ("filter_default_fields", "INTEGER"),
+                ("filter_total_fields", "INTEGER"),
+                ("stat_card_count", "INTEGER"),
+                ("component_library", "TEXT"),
+                ("currency_format", "TEXT"),
+                ("date_format", "TEXT"),
+                ("validation_type", "TEXT"),
+                ("validation_rules", "TEXT"),
+                ("full_content", "TEXT"),
+                ("extracted_specs", "TEXT"),
+                ("unmeasurable_specs", "TEXT"),
+            ]
+
+            # 获取现有列
+            existing_cols = set(row[1] for row in conn.execute("PRAGMA table_info(prototypes)"))
+
+            # 添加缺失的列
+            for col_name, col_type in new_columns:
+                if col_name not in existing_cols:
+                    conn.execute(f"ALTER TABLE prototypes ADD COLUMN {col_name} {col_type}")
+
             conn.commit()
 
     def _load_sessions(self):
@@ -123,16 +173,50 @@ class ReviewSessionManager:
                     "SELECT * FROM prototypes WHERE session_id = ?", (session_id,)
                 ).fetchall()
                 for pr in proto_rows:
+                    # 安全获取所有字段（兼容旧数据库中没有新列的情况）
+                    font_h_str = _row_val(pr, "font_hierarchy")
+                    validation_str = _row_val(pr, "validation_rules")
+                    extracted_str = _row_val(pr, "extracted_specs")
+                    unmeas_str = _row_val(pr, "unmeasurable_specs")
+                    button_str = _row_val(pr, "button_types")
+                    popup_str = _row_val(pr, "popup_types")
+                    components_str = _row_val(pr, "components")
+
                     session.prototypes.append(PrototypeDescription(
-                        id=pr["id"],
-                        name=pr["name"],
-                        document_id=pr["document_id"],
-                        page_name=pr["page_name"] or "",
-                        layout=pr["layout"] or "",
-                        components=json.loads(pr["components"] or "[]"),
-                        interactions=pr["interactions"] or "",
-                        query_text=pr["query_text"] or "",
-                        image_path=pr["image_path"] or "",
+                        id=_row_val(pr, "id", ""),
+                        name=_row_val(pr, "name", ""),
+                        document_id=_row_val(pr, "document_id"),
+                        page_name=_row_val(pr, "page_name", ""),
+                        layout=_row_val(pr, "layout", ""),
+                        components=json.loads(components_str or "[]"),
+                        interactions=_row_val(pr, "interactions", ""),
+                        query_text=_row_val(pr, "query_text", ""),
+                        image_path=_row_val(pr, "image_path", ""),
+                        # New fields (may be None for old data)
+                        page_type=_row_val(pr, "page_type"),
+                        fidelity_level=_row_val(pr, "fidelity_level"),
+                        module_path=_row_val(pr, "module_path"),
+                        layout_type=_row_val(pr, "layout_type"),
+                        min_resolution=_row_val(pr, "min_resolution"),
+                        primary_color=_row_val(pr, "primary_color"),
+                        font_hierarchy=json.loads(font_h_str) if font_h_str else None,
+                        component_spacing=_row_val(pr, "component_spacing"),
+                        button_types=button_str.split(",") if button_str else None,
+                        form_fields_per_row=_row_val(pr, "form_fields_per_row"),
+                        table_column_count=_row_val(pr, "table_column_count"),
+                        table_page_size=_row_val(pr, "table_page_size"),
+                        popup_types=popup_str.split(",") if popup_str else None,
+                        filter_default_fields=_row_val(pr, "filter_default_fields"),
+                        filter_total_fields=_row_val(pr, "filter_total_fields"),
+                        stat_card_count=_row_val(pr, "stat_card_count"),
+                        component_library=_row_val(pr, "component_library"),
+                        currency_format=_row_val(pr, "currency_format"),
+                        date_format=_row_val(pr, "date_format"),
+                        validation_type=_row_val(pr, "validation_type"),
+                        validation_rules=json.loads(validation_str) if validation_str else None,
+                        full_content=_row_val(pr, "full_content"),
+                        extracted_specs=json.loads(extracted_str) if extracted_str else None,
+                        unmeasurable_specs=unmeas_str.split(",") if unmeas_str else None,
                     ))
 
                 self.sessions[session_id] = session
@@ -171,11 +255,20 @@ class ReviewSessionManager:
 
             # 插入新的
             for p in prototypes:
-                conn.execute("""
+                conn.execute(f"""
                     INSERT INTO prototypes
                     (id, session_id, name, document_id, page_name, layout, components,
-                     interactions, query_text, image_path)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     interactions, query_text, image_path,
+                     page_type, fidelity_level, module_path,
+                     layout_type, min_resolution,
+                     primary_color, font_hierarchy, component_spacing,
+                     button_types, form_fields_per_row, table_column_count, table_page_size,
+                     popup_types, filter_default_fields, filter_total_fields, stat_card_count,
+                     component_library,
+                     currency_format, date_format,
+                     validation_type, validation_rules,
+                     full_content, extracted_specs, unmeasurable_specs)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     p.id,
                     session_id,
@@ -187,6 +280,31 @@ class ReviewSessionManager:
                     p.interactions,
                     p.query_text,
                     p.image_path,
+                    # New fields
+                    p.page_type,
+                    p.fidelity_level,
+                    p.module_path,
+                    p.layout_type,
+                    p.min_resolution,
+                    p.primary_color,
+                    json.dumps(p.font_hierarchy) if p.font_hierarchy else None,
+                    p.component_spacing,
+                    ",".join(p.button_types) if p.button_types else None,
+                    p.form_fields_per_row,
+                    p.table_column_count,
+                    p.table_page_size,
+                    ",".join(p.popup_types) if p.popup_types else None,
+                    p.filter_default_fields,
+                    p.filter_total_fields,
+                    p.stat_card_count,
+                    p.component_library,
+                    p.currency_format,
+                    p.date_format,
+                    p.validation_type,
+                    json.dumps(p.validation_rules) if p.validation_rules else None,
+                    p.full_content,
+                    json.dumps(p.extracted_specs) if p.extracted_specs else None,
+                    ",".join(p.unmeasurable_specs) if p.unmeasurable_specs else None,
                 ))
             conn.commit()
 
@@ -290,76 +408,40 @@ class ReviewSessionManager:
         image_path: str,
         name: str,
         document_id: Optional[str] = None,
-        layout: str = "",
-        components: list[str] = None,
-        interactions: str = "",
     ) -> PrototypeDescription:
         """
-        注册原型图到会话（自动调用 GLM 分析图片）
+        注册原型图到会话（仅绑定，不分析）
+
+        注意：原型图的分析和丰富存储在 review 阶段通过 enrich_prototype 工具完成。
 
         Args:
             session_id: 会话 ID
             image_path: 原型图文件路径
             name: 原型图名称（如"登录页"）
             document_id: 可选，关联的 PRD document_id
-            layout: 布局描述
-            components: 组件列表
-            interactions: 交互描述
 
         Returns:
-            PrototypeDescription: 原型图描述
+            PrototypeDescription: 最小化的原型图描述
         """
         session = self._get_session(session_id)
-        if components is None:
-            components = []
 
         # 生成 id
         prototype_id = str(uuid.uuid4())[:16]
 
-        # 如果没有提供 layout/components/interactions，自动调用 GLM 分析图片
-        if not layout or not components:
-            try:
-                from models.glm import GLMModel
-                glm = GLMModel()
-                analysis_result = glm.analyze_image(
-                    image_path,
-                    """分析这张原型图，请提取：
-1. 页面名称/标题
-2. 布局结构（头部、内容区、底部等）
-3. 组件列表（按钮、表单、列表、导航等）
-4. 交互元素（跳转、弹窗、状态变化等）
-
-请以结构化格式返回，用分隔线清晰区分各部分。"""
-                )
-                
-                # 解析 GLM 返回的分析结果
-                layout, components, interactions = self._parse_prototype_analysis(analysis_result, name)
-            except Exception as e:
-                logger.warning(f"Failed to analyze prototype image: {e}")
-
-        # 生成 query_text
-        query_text = f"{name} {layout} {' '.join(components)}"
-
-        # 生成 embedding
-        embedding = self.embedder.embed_query(query_text)
-
-        # 创建描述对象
+        # 创建最小化描述（不分析，layout/components 等在 review 阶段填充）
         description = PrototypeDescription(
             id=prototype_id,
             name=name,
             document_id=document_id,
             page_name=name,
-            layout=layout,
-            components=components,
-            interactions=interactions,
-            query_text=query_text,
+            layout="",
+            components=[],
+            interactions="",
+            query_text=name,
             image_path=image_path,
         )
 
-        # 存储到 PrototypeStore
-        self.prototype_store.store(description, embedding)
-
-        # 添加到会话
+        # 添加到会话（不存储到向量库，由 review 阶段的 enrich_prototype 处理）
         session.prototypes.append(description)
         session.updated_at = __import__("datetime").datetime.now()
         self._save_session(session)
@@ -367,111 +449,6 @@ class ReviewSessionManager:
 
         logger.info(f"Registered prototype {prototype_id} to session {session_id}, bound to doc {document_id}")
         return description
-
-    def _parse_prototype_analysis(self, analysis_text: str, default_name: str) -> tuple:
-        """解析 GLM 返回的原型图分析结果"""
-        layout = ""
-        components = []
-        interactions = ""
-
-        # 尝试修复常见编码问题
-        try:
-            # 如果包含乱码特征，尝试修复
-            if 'ҳ' in analysis_text or '��' in analysis_text:
-                # GBK 乱码特征：尝试用 GBK 解码再编码为 UTF-8
-                try:
-                    fixed = analysis_text.encode('gbk', errors='ignore').decode('utf-8', errors='ignore')
-                    if fixed and '页面' in fixed:
-                        analysis_text = fixed
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        lines = analysis_text.split('\n')
-        current_section = None
-
-        # 预扫描：检测是否包含关键段落（兼容乱码情况）
-        has_name = any('1.' in l or '页面' in l or 'ҳ' in l for l in lines)
-        has_layout = any('2.' in l or '布局' in l or '���' in l for l in lines)
-        has_component = any('3.' in l or '组件' in l or '���б�' in l for l in lines)
-        has_interaction = any('4.' in l or '交互' in l or '����' in l for l in lines)
-
-        # 备用组件提取：全文关键词匹配
-        fallback_components = []
-        common_components = ['按钮', '输入框', '表单', '列表', '导航', '菜单', '卡片',
-                            '弹窗', '对话框', '图标', '图片', '文本', '搜索', '筛选',
-                            '标签', '轮播', '表格', '分页', '侧边栏', '底部导航', '头部',
-                            '导航栏', '状态', '下拉框', '表格', '标签页']
-        for comp in common_components:
-            if comp in analysis_text:
-                fallback_components.append(comp)
-
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            # 识别章节标题（支持乱码变体）
-            lower_line = line.lower()
-            is_name = '1.' in lower_line or 'ҳ' in line or ('页面' in line and '名称' in line)
-            is_layout = '2.' in lower_line or '���' in line or '布局' in line
-            is_component = '3.' in lower_line or '���б�' in line or '组件' in line
-            is_interaction = '4.' in lower_line or '����' in line or '交互' in line
-
-            if is_name:
-                current_section = 'name'
-            elif is_layout:
-                current_section = 'layout'
-            elif is_component:
-                current_section = 'component'
-            elif is_interaction:
-                current_section = 'interaction'
-            elif has_interaction and not current_section:
-                # 如果文本中有"交互"相关内容但没有明确章节，尝试识别
-                if '交互' in line or '点击' in line or '跳转' in line or '弹窗' in line:
-                    current_section = 'interaction'
-            else:
-                # 解析内容
-                content = line.lstrip('-.*:、 ').strip()
-                if not content:
-                    continue
-
-                # 跳过无效内容
-                if any(content.startswith(x) for x in ['分析', '这张', '请', '请以', '###']):
-                    continue
-
-                if current_section == 'layout' or (current_section == 'name' and layout == ''):
-                    # 累积布局描述
-                    if layout:
-                        layout += ' ' + content
-                    else:
-                        layout = content
-                elif current_section == 'interaction':
-                    # 累积交互描述
-                    if interactions:
-                        interactions += ' ' + content
-                    else:
-                        interactions = content
-                elif current_section == 'component' or current_section is None:
-                    # 提取组件名称
-                    extracted = content
-                    if '(' in extracted:
-                        extracted = extracted.split('(')[0].strip()
-                    # 清理常见的格式前缀
-                    extracted = extracted.lstrip('**0123456789.、:：* ')
-                    if extracted and extracted not in components:
-                        components.append(extracted)
-
-        # 如果章节解析失败但有备用组件，使用备用
-        if not components and fallback_components:
-            components = fallback_components
-
-        # 如果仍然没有，添加默认组件
-        if not components:
-            components = ['待分析组件']
-
-        return layout, components, interactions
 
     def bind_prototype_to_document(
         self,
