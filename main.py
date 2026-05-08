@@ -1,15 +1,9 @@
 """PRD & 原型图审查系统入口"""
 
-import sys
 from pathlib import Path
 
 from agent.review_agent import (
     create_review_agent,
-    StreamChunk,
-    StreamChunkType,
-)
-from agent.anthropic_review_agent import (
-    create_anthropic_review_agent,
 )
 from agent.session import get_session_manager
 from agent.schemas import ReviewSession
@@ -22,7 +16,7 @@ class Colors:
     RESULT = "\033[94m"      # 蓝色 - 结果
     FINAL = "\033[92m"       # 绿色 - 最终
     STATUS = "\033[90m"      # 灰色 - 状态
-    TEXT = "\033[95m"        # 洋红 - 文本（Anthropic 特有）
+    TEXT = "\033[95m"        # 洋红 - 文本
     RESET = "\033[0m"
 
 
@@ -154,21 +148,13 @@ def main():
     print("  session <session_id>         - 查看会话状态")
     print("  review <session_id>          - 开始审查指定会话（流式）")
     print("  review <session_id> --sync  - 开始审查指定会话（同步，非流式）")
-    print("  use anthropic|langgraph      - 切换 Agent 类型")
+    print()
     print()
     print("  直接输入审查请求，Agent 将自动处理")
     print()
 
-    # 检查是否使用 Anthropic 模式（支持运行时切换）
-    use_anthropic = "--anthropic" in sys.argv
-    if use_anthropic:
-        agent = create_anthropic_review_agent()
-        agent_type = "anthropic"
-        print("[使用 Anthropic 原生流式接口]")
-    else:
-        agent = create_review_agent()
-        agent_type = "langgraph"
-    print(f"当前 Agent: {agent_type}")
+    agent = create_review_agent()
+    print(f"当前 Agent: langgraph")
     print()
     session_mgr = get_session_manager()
 
@@ -187,25 +173,6 @@ def main():
 
             parts = user_input.split()
             cmd = parts[0].lower()
-
-            # 切换 Agent 类型
-            if cmd == "use":
-                if len(parts) < 2:
-                    print("用法: use anthropic|langgraph")
-                    print(f"当前: {agent_type}")
-                    continue
-                target = parts[1].lower()
-                if target == "anthropic":
-                    agent = create_anthropic_review_agent()
-                    agent_type = "anthropic"
-                    print("[切换到 Anthropic 原生流式接口]")
-                elif target == "langgraph":
-                    agent = create_review_agent()
-                    agent_type = "langgraph"
-                    print("[切换到 LangGraph 流式接口]")
-                else:
-                    print(f"未知类型: {target}，可用: anthropic, langgraph")
-                continue
 
             # 创建新会话
             if cmd == "new":

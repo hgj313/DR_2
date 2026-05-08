@@ -19,15 +19,12 @@ dependencies = [
     "transformers>=4.50.0",
     "langgraph-checkpoint-sqlite>=3.0.3",
     "torch==2.6.0+cu124",
-    "anthropic>=0.100.0",
 ]
 
 [tool.uv]
 # 全局索引配置
 index-strategy = "unsafe-best-match"
 
-[tool.uv]
-# 全局索引配置
 [[tool.uv.index]]
 name = "pytorch"
 url = "https://download.pytorch.org/whl/cu124"
