@@ -135,6 +135,28 @@ def retrieve_standards(query: str) -> str:
     return "\n\n".join(formatted)
 
 
+def _fmt_val(val):
+    """格式化字段值：None/空跳过，list用逗号连接，dict格式化，基础类型直接转"""
+    if val is None:
+        return None
+    if isinstance(val, list):
+        return ", ".join(str(v) for v in val) if val else None
+    if isinstance(val, dict):
+        lines = []
+        for k, v in val.items():
+            lines.append(f"  {k}: {v}")
+        return "\n".join(lines) if lines else None
+    return val
+
+
+def _fmt_field(label: str, val) -> str:
+    """格式化单个字段，返回行字符串或None"""
+    formatted = _fmt_val(val)
+    if formatted is None:
+        return None
+    return f"{label}: {formatted}"
+
+
 @tool
 def retrieve_prototypes(query: str, document_id: str = None) -> str:
     """从原型描述库检索相关内容"""
@@ -151,14 +173,99 @@ def retrieve_prototypes(query: str, document_id: str = None) -> str:
 
     formatted = []
     for desc in results:
-        formatted.append(f"- 页面: {desc.page_name}\n  布局: {desc.layout}\n  组件: {', '.join(desc.components)}\n  交互: {desc.interactions}")
+        lines = [f"=== [{desc.name}] ==="]
+
+        # 基础字段
+        for label, val in [
+            ("page_name", desc.page_name),
+            ("layout", desc.layout),
+            ("components", desc.components),
+            ("interactions", desc.interactions),
+        ]:
+            line = _fmt_field(label, val)
+            if line:
+                lines.append(line)
+
+        # 页面元数据
+        for label, val in [
+            ("page_type", desc.page_type),
+            ("fidelity_level", desc.fidelity_level),
+            ("module_path", desc.module_path),
+        ]:
+            line = _fmt_field(label, val)
+            if line:
+                lines.append(line)
+
+        # 布局详情
+        for label, val in [
+            ("layout_type", desc.layout_type),
+            ("min_resolution", desc.min_resolution),
+            ("component_spacing", desc.component_spacing),
+        ]:
+            line = _fmt_field(label, val)
+            if line:
+                lines.append(line)
+
+        # 视觉要素
+        for label, val in [
+            ("primary_color", desc.primary_color),
+            ("font_hierarchy", desc.font_hierarchy),
+        ]:
+            line = _fmt_field(label, val)
+            if line:
+                lines.append(line)
+
+        # 组件详情
+        for label, val in [
+            ("button_types", desc.button_types),
+            ("form_fields_per_row", desc.form_fields_per_row),
+            ("table_column_count", desc.table_column_count),
+            ("table_page_size", desc.table_page_size),
+            ("popup_types", desc.popup_types),
+            ("filter_default_fields", desc.filter_default_fields),
+            ("filter_total_fields", desc.filter_total_fields),
+            ("stat_card_count", desc.stat_card_count),
+            ("component_library", desc.component_library),
+        ]:
+            line = _fmt_field(label, val)
+            if line:
+                lines.append(line)
+
+        # 数据格式
+        for label, val in [
+            ("currency_format", desc.currency_format),
+            ("date_format", desc.date_format),
+        ]:
+            line = _fmt_field(label, val)
+            if line:
+                lines.append(line)
+
+        # 验证规则
+        for label, val in [
+            ("validation_type", desc.validation_type),
+            ("validation_rules", desc.validation_rules),
+        ]:
+            line = _fmt_field(label, val)
+            if line:
+                lines.append(line)
+
+        # 分析结果
+        for label, val in [
+            ("extracted_specs", desc.extracted_specs),
+            ("unmeasurable_specs", desc.unmeasurable_specs),
+        ]:
+            line = _fmt_field(label, val)
+            if line:
+                lines.append(line)
+
+        formatted.append("\n".join(lines))
 
     return "\n\n".join(formatted)
 
 
 @tool
 def analyze_prd(content: str) -> str:
-    """分析 PRD 文档内容"""
+    """分析 PRD 文档内容--非流式方法"""
     model = get_minimax_model()
 
     prompt = ANALYZE_PRD_PROMPT.format(content=content[:8000])  # 限制长度
@@ -261,7 +368,7 @@ def generate_report(
         {"role": "user", "content": prompt},
     ])
 
-    # 处理 LangChain AIMessage 对象的 content（可能是字符串或列表）
+    # 处理 LangChain AIMessage 对象的 content（可能是字符串或列表--实际测试一直是str）
     content = response.content if hasattr(response, 'content') else str(response)
     if isinstance(content, list):
         # 提取纯文本，过滤掉思考内容
@@ -295,6 +402,31 @@ def store_prototype_description(
     layout: str,
     components: list[str],
     interactions: str,
+    image_path: str = None,
+    page_type: str = None,
+    fidelity_level: str = None,
+    module_path: str = None,
+    layout_type: str = None,
+    min_resolution: str = None,
+    primary_color: str = None,
+    font_hierarchy: dict = None,
+    component_spacing: str = None,
+    button_types: list[str] = None,
+    form_fields_per_row: int = None,
+    table_column_count: int = None,
+    table_page_size: int = None,
+    popup_types: list[str] = None,
+    filter_default_fields: int = None,
+    filter_total_fields: int = None,
+    stat_card_count: int = None,
+    component_library: str = None,
+    currency_format: str = None,
+    date_format: str = None,
+    validation_type: str = None,
+    validation_rules: dict = None,
+    full_content: str = None,
+    extracted_specs: dict = None,
+    unmeasurable_specs: list[str] = None,
 ) -> str:
     """存储原型图描述到向量数据库（防重复：基于 document_id + page_name）"""
     from vec_db.embeddings.bge_m3_embedding import BgeM3Embeddings
@@ -308,7 +440,7 @@ def store_prototype_description(
     # 生成 embedding
     embedding = embedder.embed_query(query_text)
 
-    # 创建描述对象
+    # 创建描述对象（一次性存入所有字段）
     description = PrototypeDescription(
         id="",
         name=name,
@@ -318,6 +450,31 @@ def store_prototype_description(
         components=components,
         interactions=interactions,
         query_text=query_text,
+        image_path=image_path or "",
+        page_type=page_type,
+        fidelity_level=fidelity_level,
+        module_path=module_path,
+        layout_type=layout_type,
+        min_resolution=min_resolution,
+        primary_color=primary_color,
+        font_hierarchy=font_hierarchy,
+        component_spacing=component_spacing,
+        button_types=button_types,
+        form_fields_per_row=form_fields_per_row,
+        table_column_count=table_column_count,
+        table_page_size=table_page_size,
+        popup_types=popup_types,
+        filter_default_fields=filter_default_fields,
+        filter_total_fields=filter_total_fields,
+        stat_card_count=stat_card_count,
+        component_library=component_library,
+        currency_format=currency_format,
+        date_format=date_format,
+        validation_type=validation_type,
+        validation_rules=validation_rules,
+        full_content=full_content,
+        extracted_specs=extracted_specs,
+        unmeasurable_specs=unmeasurable_specs,
     )
 
     # 存储
@@ -577,3 +734,50 @@ def get_all_tools():
         enrich_prototype,
         generate_comparison_report,
     ]
+
+
+# ============ 测试工具 ============
+
+@tool
+def calculator(expression: str) -> str:
+    """
+    简单的计算器工具（仅用于测试）
+
+    Args:
+        expression: 数学表达式，如 "2 + 2" 或 "10 * 5"
+
+    Returns:
+        计算结果
+    """
+    try:
+        result = eval(expression)
+        return f"计算结果: {expression} = {result}"
+    except Exception as e:
+        return f"计算错误: {str(e)}"
+
+
+@tool
+def get_current_time() -> str:
+    """
+    获取当前时间（仅用于测试）
+
+    Returns:
+        当前时间字符串
+    """
+    from datetime import datetime
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+@tool
+def echo_message(message: str) -> str:
+    """
+    回显消息工具（仅用于测试）
+
+    Args:
+        message: 要回显的消息
+
+    Returns:
+        原样返回的消息
+    """
+    return f"收到消息: {message}"
+

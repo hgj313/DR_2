@@ -27,8 +27,10 @@ def print_chunk(chunk, use_color: bool = True):
     end = "\n"
     flush = False
 
-    # 统一转换为字符串值进行比较（兼容新旧两种枚举类型）
-    if hasattr(chunk.type, 'value'):
+    # 获取 chunk 类型
+    if hasattr(chunk, 'is_split') and chunk.is_split and hasattr(chunk, 'chunk_type'):
+        chunk_type = chunk.chunk_type
+    elif hasattr(chunk.type, 'value'):
         chunk_type = chunk.type.value
     else:
         chunk_type = str(chunk.type)
@@ -47,6 +49,12 @@ def print_chunk(chunk, use_color: bool = True):
             prefix = "🤔 思考"
         else:
             prefix = "[思考]"
+    elif chunk_type == "responding":
+        if use_color:
+            color = Colors.FINAL
+            prefix = "✨ 回复"
+        else:
+            prefix = "[回复]"
     elif chunk_type == "tool_call":
         if use_color:
             color = Colors.TOOL
@@ -104,20 +112,28 @@ def stream_review(agent, session_id: str, session: ReviewSession, use_color: boo
     print("=" * 60 + "\n")
 
     for chunk in agent.stream(user_msg, thread_id=session_id):
-        chunk_type = chunk.type.value if hasattr(chunk.type, 'value') else str(chunk.type)
+        # 获取 chunk 类型，支持 is_split
+        if hasattr(chunk, 'is_split') and chunk.is_split and hasattr(chunk, 'chunk_type'):
+            chunk_type = chunk.chunk_type
+        elif hasattr(chunk.type, 'value'):
+            chunk_type = chunk.type.value
+        else:
+            chunk_type = str(chunk.type)
 
         if chunk_type == "thinking":
             print_chunk(chunk, use_color)
             print()
+        elif chunk_type == "responding":
+            print_chunk(chunk, use_color)
+            print()
         elif chunk_type == "tool_result":
-            if isinstance(chunk.content, dict):
-                tool_name = chunk.content.get("tool", "unknown")
-                result = chunk.content.get("result", "")
-                if len(result) > 200:
-                    result = result[:200] + "..."
-                print(f"{Colors.TOOL if use_color else ''}🔧 调用工具: {tool_name}{Colors.RESET if use_color else ''}")
-                print(f"{Colors.RESULT if use_color else ''}📋 结果: {result}{Colors.RESET if use_color else ''}")
-                print()
+            tool_name = chunk.messages[0].name if chunk.messages else "unknown"
+            result = chunk.content
+            if len(result) > 200:
+                result = result[:200] + "..."
+            print(f"{Colors.TOOL if use_color else ''}🔧 调用工具: {tool_name}{Colors.RESET if use_color else ''}")
+            print(f"{Colors.RESULT if use_color else ''}📋 结果: {result}{Colors.RESET if use_color else ''}")
+            print()
         elif chunk_type == "tool_call":
             print_chunk(chunk, use_color)
             print()
