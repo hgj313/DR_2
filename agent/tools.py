@@ -726,7 +726,7 @@ def get_all_tools():
         retrieve_prd_chunks,
         analyze_prd,
         analyze_prototype,
-        generate_report,
+        # generate_report,
         store_prototype_description,
         extract_prd_specs,
         extract_prototype_specs,

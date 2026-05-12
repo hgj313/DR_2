@@ -18,7 +18,6 @@ REVIEW_AGENT_PROMPT = """你是一个专业的 PRD 和原型图审查专家。
 - extract_prototype_specs: 从原型图分析结果中提取可量化规格值（返回 JSON）
 - extract_standard_rules: 从设计标准文档片段中提取可量化规范值（返回 JSON）
 - generate_comparison_report: 生成对比式合规性审查报告（三栏对比）
-- generate_report: 生成传统结构化审查报告（分离式，用于 fallback）
 
 ## 核心工作流程（对比报告模式）
 

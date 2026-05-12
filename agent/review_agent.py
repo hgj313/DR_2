@@ -184,7 +184,6 @@ class ReviewAgent:
             {"messages": [{"role": "user", "content": input}]},
             config,
         ):
-            print(f"[DEBUG] event type: {type(event)}, event: {repr(event)[:200]}")
             chunk = self._parse_stream_event(event, tool_names)
             if chunk:
                 if isinstance(chunk, list):
@@ -236,69 +235,7 @@ class ReviewAgent:
         Returns:
             StreamChunk、StreamChunk列表 或 None（当content包含<think>标签时返回列表）
         """
-        # 处理 messages 模式的流式输出
-        #####################################################################################################
-        # if "messages" in event:
-        #     messages_batch = event["messages"]
-        #     if not messages_batch:
-        #         return None
-
-        #     # 获取最后一条消息
-        #     last_msg = messages_batch[-1]
-
-        #     # AIMessage - 可能是思考或最终回复
-        #     if hasattr(last_msg, "type") and last_msg.type == "ai":
-        #         content = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
-
-        #         # 检查是否有工具调用
-        #         if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-        #             tool_call = last_msg.tool_calls[0]
-        #             tool_name = tool_call.get('name', 'unknown')
-
-        #             if tool_name not in tool_names:
-        #                 return StreamChunk(
-        #                     type=StreamChunkType.ERROR,
-        #                     content=f"未授权的工具调用: {tool_name}",
-        #                     node="model",
-        #                 )
-
-        #             tool_args = tool_call.get('args', {})
-        #             args_str = ", ".join(
-        #                 f"{k}={repr(v)[:50]}{'...' if len(str(v)) > 50 else ''}"
-        #                 for k, v in tool_args.items()
-        #             )
-        #             return StreamChunk(
-        #                 type=StreamChunkType.TOOL_CALL,
-        #                 content=f"{tool_name}({args_str})" if args_str else tool_name,
-        #                 node="model",
-        #             )
-
-        #         # 有内容但没有工具调用 - 可能是最终回复或中间思考
-        #         if content:
-        #             # 空内容通常是中间步骤
-        #             if not content.strip():
-        #                 return None
-        #             return StreamChunk(
-        #                 type=StreamChunkType.FINAL,
-        #                 content=content,
-        #                 node="model",
-        #             )
-
-        #     # ToolMessage - 工具返回结果
-        #     if hasattr(last_msg, "type") and last_msg.type == "tool":
-        #         tool_name = last_msg.name if hasattr(last_msg, "name") else "unknown"
-        #         content = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
-        #         return StreamChunk(
-        #             type=StreamChunkType.TOOL_RESULT,
-        #             content={"tool": tool_name, "result": content},
-        #             node="tools",
-        #         )
-
-        #     return None
-
         # 处理 updates 模式的输出
-        print(f"{'='*80}\n")
-        
         for node_name, node_data in event.items():
             if node_name == "__root__":
                 continue
@@ -318,8 +255,6 @@ class ReviewAgent:
                                         node=node_name,
                                         messages=[last_msg],
                                     )
-                                for k,v in tool_call.get('args', {}).items():
-                                    print(f"[工具调用具名：{tool_name}\n 参数内容：{k}={repr(v)}")
                             return StreamChunk(
                                 node=node_name,
                                 messages=[last_msg],

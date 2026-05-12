@@ -361,14 +361,20 @@ class ReviewSessionManager:
 
         stored_chunk_ids = []
         if chunk_results:
+            # 批量向量化，避免循环内逐条插入 ChromaDB
             contents = [c.content for c in chunk_results]
             embeddings = self.embedder.embed_documents(contents)
 
+            # 预生成所有 chunk_id 和 metadata
+            ids_to_store = []
+            docs_to_store = []
+            emb_to_store = []
+            meta_to_store = []
+
+            import hashlib
             for i, chunk_result in enumerate(chunk_results):
-                import hashlib
                 hash_input = f"{chunk_result.content}|{chunk_result.metadata.get('header_path', '')}|{i}"
                 chunk_id = hashlib.sha256(hash_input.encode()).hexdigest()[:32]
-
                 chunk_metadata = {
                     "document_id": document_id,
                     "header_path": chunk_result.metadata.get("header_path", ""),
@@ -376,14 +382,19 @@ class ReviewSessionManager:
                     "chunk_index": i,
                     **chunk_result.metadata,
                 }
-                #循环里面插入数据库性能极差，后续第二次改进-2026.5.5（hgj)
-                chroma_store.store(
-                    ids=[chunk_id],
-                    documents=[chunk_result.content],
-                    embeddings=[embeddings[i]],
-                    metadatas=[chunk_metadata],
-                )
+                ids_to_store.append(chunk_id)
+                docs_to_store.append(chunk_result.content)
+                emb_to_store.append(embeddings[i])
+                meta_to_store.append(chunk_metadata)
                 stored_chunk_ids.append(chunk_id)
+
+            # 一次批量插入
+            chroma_store.store(
+                ids=ids_to_store,
+                documents=docs_to_store,
+                embeddings=emb_to_store,
+                metadatas=meta_to_store,
+            )
 
         # 创建 DocumentInfo
         doc_info = DocumentInfo(
